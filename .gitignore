@@ -1,4 +1,5 @@
 node_modules
 src/database/session
-session_id.txt
+sessions
 .env
+*.log
