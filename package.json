@@ -1,15 +1,8 @@
 {
-  "name": "storm-cyber-md",
-  "version": "2.0.0",
   "type": "module",
-  "main": "index.js",
-  "scripts": {
-    "start": "node index.js"
-  },
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.8",
-    "pino": "^8.16.2",
-    "axios": "^1.6.2",
-    "fs": "0.0.1-security"
+    "@whiskeysockets/baileys": "^6.7.18",
+    "pino": "latest",
+    "telegraf": "^4.16.3"
   }
 }
