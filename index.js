@@ -5,11 +5,11 @@ import fs from 'fs'
 import readline from 'readline'
 
 // ========= CONFIG =========
-const BOT_TOKEN = '8840483730:AAFx7jONckWiT9ntamanqTCGoQCecAYs4hg' // <--- PUT TELEGRAM TOKEN HERE
+const BOT_TOKEN = process.env.TELEGRAM_TOKEN || '8840483730:AAFx7jONckWiT9ntamanqTCGoQCecAYs4hg'
 const GROUP_LINK = 'https://t.me/+Tbb5cGyYLJBhMWI0'
 const CHANNEL_LINK = 'https://t.me/+oNa3ORe_1I9lMzFk'
 const OWNER_LINK = 'https://t.me/STORMX666'
-const GROUP_ID = '' // Leave empty until you get ID - then bot will NOT force join
+const GROUP_ID = ''
 const CHANNEL_ID = ''
 const prefix = '.'
 // ==========================
@@ -28,7 +28,7 @@ function runtime(){ let s=Math.floor((Date.now()-startTime)/1000); let d=Math.fl
 function countUsers(){ try{return fs.readdirSync('./sessions').length}catch{return 0} }
 
 async function isJoined(ctx){
-  if(!GROUP_ID ||!CHANNEL_ID) return true // Skip check until you add IDs
+  if(!GROUP_ID ||!CHANNEL_ID) return true
   try{
     const g = await ctx.telegram.getChatMember(GROUP_ID, ctx.from.id)
     const c = await ctx.telegram.getChatMember(CHANNEL_ID, ctx.from.id)
@@ -36,11 +36,9 @@ async function isJoined(ctx){
   }catch{ return true }
 }
 
-// ===== TELEGRAM BOT =====
 async function startTelegram(){
-  if(BOT_TOKEN==='PUT_YOUR_TOKEN_HERE'){ console.log(Y+'⚠️ Telegram token not set - skipping Telegram bot'+R); return }
+  if(!BOT_TOKEN || BOT_TOKEN==='PUT_YOUR_TOKEN_HERE'){ console.log(Y+'⚠️ Telegram token not set'+R); return }
   const bot = new Telegraf(BOT_TOKEN)
-
   bot.start(async (ctx)=>{
     const {d,h,m}=runtime()
     const msg = `╭━─━─━─❰ 𝐒𝐓𝐎𝐑𝐌 𝐂𝐘𝐁𝐄𝐑 𝐌𝐃 ❱─━─━─━╮
@@ -77,7 +75,6 @@ async function startTelegram(){
       await ctx.reply(msg, Markup.inlineKeyboard([[Markup.button.url('📢 Group', GROUP_LINK), Markup.button.url('📣 Channel', CHANNEL_LINK)],[Markup.button.url('👑 Owner', OWNER_LINK)]]))
     }
   })
-
   bot.command('pair', async (ctx)=>{
     if(!await isJoined(ctx)) return ctx.reply('❌ Join Group and Channel first!', Markup.inlineKeyboard([[Markup.button.url('Join Group', GROUP_LINK), Markup.button.url('Join Channel', CHANNEL_LINK)]]))
     let number = ctx.message.text.split(' ')[1]?.replace(/[^0-9]/g,'')
@@ -96,25 +93,21 @@ async function startTelegram(){
       sock.ev.on('connection.update', u=>{ if(u.connection==='open'){ connectedCount++; ctx.reply(`✅ ${number} Connected!`)} })
     }catch(e){ ctx.reply('❌ Failed: '+e.message) }
   })
-
   bot.command('list', ctx=> ctx.reply(`📂 Sessions: ${countUsers()} | Online: ${connectedCount}`))
   bot.command('runtime', ctx=>{ const {d,h,m,s}=runtime(); ctx.reply(`⏱️ ${d}d ${h}h ${m}m ${s}s`) })
   bot.command('dev', ctx=> ctx.reply('👑 Owner', Markup.inlineKeyboard([[Markup.button.url('Contact', OWNER_LINK)]])))
   bot.command('creator', ctx=> ctx.reply('👑 STORM X', Markup.inlineKeyboard([[Markup.button.url('Contact', OWNER_LINK)]])))
   bot.command('disconnect', ctx=>{ const n=ctx.message.text.split(' ')[1]?.replace(/[^0-9]/g,''); if(!n) return ctx.reply('Usage: /disconnect 2567...'); try{ fs.rmSync('./sessions/'+n,{recursive:true,force:true}); ctx.reply(`✅ ${n} deleted`)}catch{ctx.reply('❌ Not found')} })
-
   bot.launch()
   console.log(G+B+'✅ TELEGRAM PAIR BOT ONLINE'+R)
 }
 
-// ===== WHATSAPP BOT =====
 async function startWhatsApp(){
   console.log(C+B+`\n █ STORM CYBER MD - WHATSAPP BOT █\n`+R)
   const { version } = await fetchLatestBaileysVersion()
   const { state, saveCreds } = await useMultiFileAuthState('./src/database/session')
   const sock = makeWASocket({ version, logger: pino({ level: 'silent' }), auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })) }, browser: Browsers.ubuntu('Chrome'), printQRInTerminal:false, syncFullHistory:false })
   sock.ev.on('creds.update', saveCreds)
-
   if(!state.creds.registered){
     let num = await ask(C+B+'📱 Enter main bot number (2567xxxxxxx): '+R)
     num = num.replace(/[^0-9]/g,'')
@@ -122,20 +115,16 @@ async function startWhatsApp(){
     let r=0; while(sock.ws.readyState!==1 && r<12){ await new Promise(a=>setTimeout(a,1000)); r++ }
     try{ const code = await sock.requestPairingCode(num); console.log(G+B+`\n CODE: ${code} \n`+R) }catch(e){ console.log(Rd+e.message+R) }
   }
-
   sock.ev.on('connection.update', u=>{
     if(u.connection==='open'){ console.log(G+B+'\n✅ WHATSAPP BOT CONNECTED!\n'+R); connectedCount++ }
     if(u.connection==='close'){ console.log(Rd+'WhatsApp closed, restarting 3s...'+R); setTimeout(startWhatsApp,3000) }
   })
-
-  // Load commands
   const commands = new Map()
   try{
     const files = fs.readdirSync('./src/commands')
     for(const f of files){ if(!f.endsWith('.js')) continue; try{ const mod=await import('./src/commands/'+f+'?v='+Date.now()); if(mod.default?.name){ commands.set(mod.default.name.toLowerCase(), mod.default); if(mod.default.alias) mod.default.alias.forEach(a=> commands.set(a.toLowerCase(), mod.default)) } }catch{} }
   }catch{}
   console.log(C+`Loaded ${commands.size} WhatsApp commands`+R)
-
   sock.ev.on('messages.upsert', async m=>{
     try{
       const msg=m.messages[0]; if(!msg.message) return
@@ -148,7 +137,5 @@ async function startWhatsApp(){
     }catch{}
   })
 }
-
-// START BOTH
 startTelegram()
 startWhatsApp()
