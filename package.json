@@ -1,7 +1,7 @@
 {
   "type": "module",
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.18",
+    "@whiskeysockets/baileys": "^7.0.0-rc14",
     "pino": "latest",
     "telegraf": "^4.16.3"
   }
