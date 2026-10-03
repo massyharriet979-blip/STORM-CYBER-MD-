@@ -113,11 +113,31 @@ async function startTelegram(){
       await delay(700)
       const { version } = await fetchLatestBaileysVersion()
       const { state, saveCreds } = await useMultiFileAuthState('./sessions/'+number)
-      const sock = makeWASocket({ version, logger: pino({ level: 'silent' }), auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })) }, browser: Browsers.macOS('Safari'), printQRInTerminal:false, syncFullHistory:false, markOnlineOnConnect:false })
+      // FAST SOCKET CONFIG
+      const sock = makeWASocket({
+        version,
+        logger: pino({ level: 'silent' }),
+        auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })) },
+        browser: Browsers.macOS('Safari'),
+        printQRInTerminal:false,
+        syncFullHistory:false,
+        markOnlineOnConnect:false,
+        connectTimeoutMs: 60000,
+        keepAliveIntervalMs: 15000,
+        defaultQueryTimeoutMs: 60000,
+        emitOwnEvents: false,
+        generateHighQualityLinkPreview: false
+      })
       sock.ev.on('creds.update', saveCreds)
       await ctx.telegram.editMessageText(ctx.chat.id, sMsg.message_id, null, toSmallCaps(`🔗 Opening socket for ${number}...`))
-      await delay(2000)
-      const code = await sock.requestPairingCode(number)
+      await delay(4000)
+      let code
+      try {
+        code = await sock.requestPairingCode(number)
+      } catch(e) {
+        await delay(2000)
+        code = await sock.requestPairingCode(number)
+      }
       const clean = code.replace(/-/g,'').toUpperCase()
 
       const pairMsg = `${toSmallCaps('🔥 Pairing code generated')}\n\n📲 ${toSmallCaps(`NUM: ${number}`)}\n\n>> ${clean} <<\n\n${toSmallCaps('Open whatsapp >')} \n${toSmallCaps('Linked devices >')} \n${toSmallCaps('Link with phone number,')} \n${toSmallCaps('And enter the code.')}\n> ${toSmallCaps('CODE EXPIRES IN 60 SECONDS')}\n@STORM X 𖤍`
@@ -150,10 +170,20 @@ async function startWhatsApp(){
   console.log(C+B+`\n █ STORM CYBER MD - WHATSAPP BOT █\n`+R)
   const { version } = await fetchLatestBaileysVersion()
   const { state, saveCreds } = await useMultiFileAuthState('./src/database/session')
-  const sock = makeWASocket({ version, logger: pino({ level: 'silent' }), auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })) }, browser: Browsers.ubuntu('Chrome'), printQRInTerminal:false, syncFullHistory:false })
+  const sock = makeWASocket({
+    version,
+    logger: pino({ level: 'silent' }),
+    auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })) },
+    browser: Browsers.ubuntu('Chrome'),
+    printQRInTerminal:false,
+    syncFullHistory:false,
+    markOnlineOnConnect:false,
+    connectTimeoutMs: 60000,
+    keepAliveIntervalMs: 15000,
+    defaultQueryTimeoutMs: 60000
+  })
   sock.ev.on('creds.update', saveCreds)
   if(!state.creds.registered){
-    // RAILWAY FIX: Use ENV first, only ask if in Termux
     let num = (process.env.MAIN_NUMBER || '').replace(/[^0-9]/g,'')
     if(!num){
       if(process.stdin.isTTY){
@@ -168,8 +198,12 @@ async function startWhatsApp(){
     }
     if(num){
       console.log(Y+'⏳ Requesting pairing code for '+num+'...'+R)
-      await delay(2000)
-      try{ const code = await sock.requestPairingCode(num); console.log(G+B+`\n CODE FOR ${num}: ${code} \n`+R) }catch(e){ console.log(Rd+e.message+R) }
+      await delay(4000)
+      try{
+        let code
+        try { code = await sock.requestPairingCode(num) } catch { await delay(2000); code = await sock.requestPairingCode(num) }
+        console.log(G+B+`\n CODE FOR ${num}: ${code} \n`+R)
+      }catch(e){ console.log(Rd+e.message+R) }
     }
   }
   sock.ev.on('connection.update', u=>{
