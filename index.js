@@ -5,7 +5,7 @@ import fs from 'fs'
 import readline from 'readline'
 
 // ========= CONFIG =========
-const BOT_TOKEN = process.env.TELEGRAM_TOKEN || '8840483730:AAFx7jONckWiT9ntamanqTCGoQCecAYs4hg'
+const BOT_TOKEN = process.env.TELEGRAM_TOKEN || '' // NEVER hardcode, use Railway Variables!
 const GROUP_LINK = 'https://t.me/+Tbb5cGyYLJBhMWI0'
 const CHANNEL_LINK = 'https://t.me/+oNa3ORe_1I9lMzFk'
 const OWNER_LINK = 'https://t.me/STORMX666'
@@ -44,7 +44,7 @@ async function isJoined(ctx){
 }
 
 async function startTelegram(){
-  if(!BOT_TOKEN){ console.log(Y+'⚠️ Telegram token not set'+R); return }
+  if(!BOT_TOKEN){ console.log(Y+'⚠️ TELEGRAM_TOKEN not set in ENV - Telegram bot disabled'+R); return }
   const bot = new Telegraf(BOT_TOKEN)
   bot.start(async (ctx)=>{
     if(!await isJoined(ctx)){
@@ -153,14 +153,27 @@ async function startWhatsApp(){
   const sock = makeWASocket({ version, logger: pino({ level: 'silent' }), auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })) }, browser: Browsers.ubuntu('Chrome'), printQRInTerminal:false, syncFullHistory:false })
   sock.ev.on('creds.update', saveCreds)
   if(!state.creds.registered){
-    let num = await ask(C+B+'📱 Enter main bot number (2567xxxxxxx): '+R)
-    num = num.replace(/[^0-9]/g,'')
-    console.log(Y+'⏳ Connecting 2 sec...'+R)
-    await delay(2000)
-    try{ const code = await sock.requestPairingCode(num); console.log(G+B+`\n CODE: ${code} \n`+R) }catch(e){ console.log(Rd+e.message+R) }
+    // RAILWAY FIX: Use ENV first, only ask if in Termux
+    let num = (process.env.MAIN_NUMBER || '').replace(/[^0-9]/g,'')
+    if(!num){
+      if(process.stdin.isTTY){
+        num = await ask(C+B+'📱 Enter main bot number (2567xxxxxxx): '+R)
+        num = num.replace(/[^0-9]/g,'')
+      } else {
+        console.log(Y+'⚠️ No session found! Set MAIN_NUMBER in Railway Variables to pair once, or upload src/database/session folder'+R)
+        console.log(Y+'Bot will wait 10s and retry...'+R)
+        await delay(10000)
+        return startWhatsApp()
+      }
+    }
+    if(num){
+      console.log(Y+'⏳ Requesting pairing code for '+num+'...'+R)
+      await delay(2000)
+      try{ const code = await sock.requestPairingCode(num); console.log(G+B+`\n CODE FOR ${num}: ${code} \n`+R) }catch(e){ console.log(Rd+e.message+R) }
+    }
   }
   sock.ev.on('connection.update', u=>{
-    if(u.connection==='open'){ console.log(G+B+'\n✅ WHATSAPP BOT CONNECTED!\n'+R); connectedCount++ }
+    if(u.connection==='open'){ console.log(G+B+'\n✅ WHATSAPP BOT CONNECTED!\n'+R); connectedCount++; try{ rl.close() }catch{} }
     if(u.connection==='close'){ console.log(Rd+'WhatsApp closed, restarting 3s...'+R); setTimeout(startWhatsApp,3000) }
   })
   const commands = new Map()
