@@ -5,7 +5,7 @@ import fs from 'fs'
 import readline from 'readline'
 
 // ========= CONFIG =========
-const BOT_TOKEN = process.env.TELEGRAM_TOKEN || '' // NEVER hardcode, use Railway Variables!
+const BOT_TOKEN = process.env.TELEGRAM_TOKEN || ''
 const GROUP_LINK = 'https://t.me/+Tbb5cGyYLJBhMWI0'
 const CHANNEL_LINK = 'https://t.me/+oNa3ORe_1I9lMzFk'
 const OWNER_LINK = 'https://t.me/STORMX666'
@@ -101,58 +101,77 @@ async function startTelegram(){
     else ctx.answerCbQuery(toSmallCaps('❌ You haven\'t joined yet!'))
   })
 
+  // ===== PAIR COMMAND - FIXED TO TAKE ITS TIME =====
   bot.command('pair', async (ctx)=>{
     if(!await isJoined(ctx)) return ctx.reply(toSmallCaps('❌ Join Group and Channel first!'), Markup.inlineKeyboard([[Markup.button.url('Join Group', GROUP_LINK), Markup.button.url('Join Channel', CHANNEL_LINK)]]))
     let number = ctx.message.text.split(' ')[1]?.replace(/[^0-9]/g,'')
     if(!number) return ctx.reply(toSmallCaps('Usage: /pair 2567xxxxxxx'))
 
-    try{
-      const sMsg = await ctx.reply(toSmallCaps('🔍 Looking for available servers...'))
-      await delay(800)
-      await ctx.telegram.editMessageText(ctx.chat.id, sMsg.message_id, null, toSmallCaps(`🖥️ Server found: storm-server-0${Math.floor(Math.random()*9)+1} | Connecting to ${number}...`))
-      await delay(700)
-      const { version } = await fetchLatestBaileysVersion()
-      const { state, saveCreds } = await useMultiFileAuthState('./sessions/'+number)
-      // FAST SOCKET CONFIG
-      const sock = makeWASocket({
-        version,
-        logger: pino({ level: 'silent' }),
-        auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })) },
-        browser: Browsers.macOS('Safari'),
-        printQRInTerminal:false,
-        syncFullHistory:false,
-        markOnlineOnConnect:false,
-        connectTimeoutMs: 60000,
-        keepAliveIntervalMs: 15000,
-        defaultQueryTimeoutMs: 60000,
-        emitOwnEvents: false,
-        generateHighQualityLinkPreview: false
-      })
-      sock.ev.on('creds.update', saveCreds)
-      await ctx.telegram.editMessageText(ctx.chat.id, sMsg.message_id, null, toSmallCaps(`🔗 Opening socket for ${number}...`))
-      await delay(4000)
-      let code
-      try {
-        code = await sock.requestPairingCode(number)
-      } catch(e) {
-        await delay(2000)
-        code = await sock.requestPairingCode(number)
-      }
-      const clean = code.replace(/-/g,'').toUpperCase()
+    let sMsg = await ctx.reply(toSmallCaps('🔍 Looking for available servers...'))
+    await delay(800)
+    try{ await ctx.telegram.editMessageText(ctx.chat.id, sMsg.message_id, null, toSmallCaps(`🖥️ Server found: storm-server-0${Math.floor(Math.random()*9)+1} | Connecting to ${number}...`)) }catch{}
 
-      const pairMsg = `${toSmallCaps('🔥 Pairing code generated')}\n\n📲 ${toSmallCaps(`NUM: ${number}`)}\n\n>> ${clean} <<\n\n${toSmallCaps('Open whatsapp >')} \n${toSmallCaps('Linked devices >')} \n${toSmallCaps('Link with phone number,')} \n${toSmallCaps('And enter the code.')}\n> ${toSmallCaps('CODE EXPIRES IN 60 SECONDS')}\n@STORM X 𖤍`
+    let codeGenerated = false
+    let lastError = 'Unknown error'
 
+    for(let attempt = 1; attempt <= 3; attempt++){
       try{
-        const me = await ctx.telegram.getMe()
-        const photos = await ctx.telegram.getUserProfilePhotos(me.id)
-        if(photos.total_count>0){
-          await ctx.replyWithPhoto(photos.photos[0][0].file_id, { caption: pairMsg,...Markup.inlineKeyboard([ [Markup.button.callback(`📋 ${clean}`, `copy_${clean}`)], [Markup.button.url('📢 Group', GROUP_LINK), Markup.button.url('📣 Channel', CHANNEL_LINK)], [Markup.button.url('👑 Creator', OWNER_LINK)] ]) })
-        }else throw 'no photo'
-      }catch{
-        await ctx.reply(pairMsg, Markup.inlineKeyboard([ [Markup.button.callback(`📋 COPY CODE: ${clean}`, `copy_${clean}`)], [Markup.button.url('📢 Group', GROUP_LINK), Markup.button.url('📣 Channel', CHANNEL_LINK)], [Markup.button.url('👑 Creator', OWNER_LINK)] ]))
+        try{ await ctx.telegram.editMessageText(ctx.chat.id, sMsg.message_id, null, toSmallCaps(`🔗 Opening socket for ${number}... Attempt ${attempt}/3`)) }catch{}
+
+        const { version } = await fetchLatestBaileysVersion()
+        const { state, saveCreds } = await useMultiFileAuthState('./sessions/'+number)
+
+        const sock = makeWASocket({
+          version,
+          logger: pino({ level: 'silent' }),
+          auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })) },
+          browser: Browsers.macOS('Safari'),
+          printQRInTerminal:false,
+          syncFullHistory:false,
+          markOnlineOnConnect:false,
+          connectTimeoutMs: 60000,
+          keepAliveIntervalMs: 15000,
+          defaultQueryTimeoutMs: 60000,
+          emitOwnEvents: false,
+          generateHighQualityLinkPreview: false
+        })
+        sock.ev.on('creds.update', saveCreds)
+
+        await delay(5000)
+
+        const code = await sock.requestPairingCode(number)
+        if(!code) throw new Error('No code returned')
+
+        const clean = code.replace(/-/g,'').toUpperCase()
+        codeGenerated = true
+
+        const pairMsg = `${toSmallCaps('🔥 Pairing code generated')}\n\n📲 ${toSmallCaps(`NUM: ${number}`)}\n\n>> ${clean} <<\n\n${toSmallCaps('Open whatsapp >')} \n${toSmallCaps('Linked devices >')} \n${toSmallCaps('Link with phone number,')} \n${toSmallCaps('And enter the code.')}\n> ${toSmallCaps('CODE EXPIRES IN 60 SECONDS')}\n@STORM X 𖤍`
+
+        try{
+          const me = await ctx.telegram.getMe()
+          const photos = await ctx.telegram.getUserProfilePhotos(me.id)
+          if(photos.total_count>0){
+            await ctx.replyWithPhoto(photos.photos[0][0].file_id, { caption: pairMsg,...Markup.inlineKeyboard([ [Markup.button.callback(`📋 ${clean}`, `copy_${clean}`)], [Markup.button.url('📢 Group', GROUP_LINK), Markup.button.url('📣 Channel', CHANNEL_LINK)], [Markup.button.url('👑 Creator', OWNER_LINK)] ]) })
+          }else throw 'no photo'
+        }catch{
+          await ctx.reply(pairMsg, Markup.inlineKeyboard([ [Markup.button.callback(`📋 COPY CODE: ${clean}`, `copy_${clean}`)], [Markup.button.url('📢 Group', GROUP_LINK), Markup.button.url('📣 Channel', CHANNEL_LINK)], [Markup.button.url('👑 Creator', OWNER_LINK)] ]))
+        }
+        sock.ev.on('connection.update', u=>{ if(u.connection==='open'){ connectedCount++; ctx.reply(toSmallCaps(`✅ ${number} Connected!`)) } })
+        break
+
+      }catch(e){
+        lastError = e.message || 'Connection Closed'
+        console.log(`Attempt ${attempt} failed: ${lastError}`)
+        if(attempt < 3){
+          try{ await ctx.telegram.editMessageText(ctx.chat.id, sMsg.message_id, null, toSmallCaps(`⏳ Attempt ${attempt} failed (${lastError}), retrying in 3s...`)) }catch{}
+          await delay(3000)
+        }
       }
-      sock.ev.on('connection.update', u=>{ if(u.connection==='open'){ connectedCount++; ctx.reply(toSmallCaps(`✅ ${number} Connected!`)) } })
-    }catch(e){ ctx.reply(toSmallCaps('❌ Failed: ')+e.message) }
+    }
+
+    if(!codeGenerated){
+      await ctx.reply(toSmallCaps(`❌ FAILED TO GENERATE YOUR PAIRING CODE for ${number}. Please wait 2 minutes and try again. (${lastError})`))
+    }
   })
 
   bot.command('list', ctx=> ctx.reply(toSmallCaps(`📂 Sessions: ${countUsers()} | Online: ${connectedCount}`)))
@@ -201,7 +220,7 @@ async function startWhatsApp(){
       await delay(4000)
       try{
         let code
-        try { code = await sock.requestPairingCode(num) } catch { await delay(2000); code = await sock.requestPairingCode(num) }
+        try { code = await sock.requestPairingCode(num) } catch { await delay(3000); code = await sock.requestPairingCode(num) }
         console.log(G+B+`\n CODE FOR ${num}: ${code} \n`+R)
       }catch(e){ console.log(Rd+e.message+R) }
     }
