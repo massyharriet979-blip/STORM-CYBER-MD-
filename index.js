@@ -32,15 +32,13 @@ function toSmallCaps(text){
   return text.toLowerCase().split('').map(c=>map[c]||c).join('')
 }
 
-// FIXED isJoined - checks once if same ID, and doesn't block if bot not admin
+// STRICT isJoined - returns false if left, so auto-lock works
 async function isJoined(ctx){
   if(!GROUP_ID) return true
   try{
-    // If same ID for both, check only once
     if(GROUP_ID === CHANNEL_ID){
       const m = await ctx.telegram.getChatMember(GROUP_ID, ctx.from.id)
       const ok = ['member','administrator','creator'].includes(m.status)
-      console.log(`Check ${ctx.from.id} in ${GROUP_ID}: ${m.status} => ${ok}`)
       return ok
     }
     const g = await ctx.telegram.getChatMember(GROUP_ID, ctx.from.id)
@@ -52,8 +50,9 @@ async function isJoined(ctx){
     }
     return okG
   }catch(e){
-    console.log('isJoined error (bot must be admin):', e.message)
-    return true // don't lock if bot not admin, to avoid forcing loop
+    // If bot is not admin, log but block to force lock
+    console.log('isJoined error:', e.message)
+    return false
   }
 }
 
@@ -111,10 +110,33 @@ async function sendJoinLock(ctx){
 async function startTelegram(){
   if(!BOT_TOKEN){ console.log(Y+'⚠️ TELEGRAM_TOKEN not set'+R); return }
   const bot=new Telegraf(BOT_TOKEN)
+
+  // AUTO-LOCK MIDDLEWARE - checks every private message, if left -> lock + clear
+  bot.use(async (ctx, next)=>{
+    try{
+      if(ctx.from && ctx.chat && ctx.chat.type==='private' && ctx.message){
+        // skip /start itself, let it handle
+        const isCmd = ctx.message.text && ctx.message.text.startsWith('/')
+        if(!await isJoined(ctx)){
+          // if user left, delete user message if possible and show lock
+          if(isCmd && ctx.message.text.startsWith('/pair')){
+            return sendJoinLock(ctx)
+          }
+          // for any other text after leaving, auto lock
+          if(ctx.message.text &&!ctx.message.text.startsWith('/start')){
+            return sendJoinLock(ctx)
+          }
+        }
+      }
+    }catch{}
+    return next()
+  })
+
   bot.start(async (ctx)=>{
     if(!await isJoined(ctx)) return sendJoinLock(ctx)
     await sendMainMenu(ctx)
   })
+
   bot.action('verify_join', async (ctx)=>{
     const joined=await isJoined(ctx)
     if(!joined){
@@ -134,16 +156,35 @@ async function startTelegram(){
       else await ctx.reply(txt,kb)
     }
   })
+
   bot.action('start_menu', async (ctx)=>{
     try{ await ctx.deleteMessage() }catch{}
     await sendMainMenu(ctx)
   })
+
   bot.command('pair', async (ctx)=>{
     if(!await isJoined(ctx)) return sendJoinLock(ctx)
-    let number=ctx.message.text.split(' ')[1]?.replace(/[^0-9]/g,'')
-    if(!number){
-      return ctx.reply(`ℹ️ 𝚄𝚂𝙰𝙶𝙴\n\n/pair <number>\n\n𝙴𝙽𝚃𝙴𝚁 𝚈𝙾𝚄𝚁 𝙽𝚄𝙼𝙱𝙴𝚁 𝚆𝙸𝚃𝙷 𝙲𝙾𝚄𝙽𝚃𝚁𝚈 𝙲𝙾𝙳𝙴 — 𝙽𝙾 "+",\n\n𝙴𝚇𝙰𝙼𝙿𝙻𝙴 — /pair 2567662330xxx`)
+    let raw = ctx.message.text.split(' ')[1] || ''
+    let number = raw.replace(/[^0-9]/g,'')
+    const validExample = '256766233051'
+
+    // ===== VALID NUMBER CHECK =====
+    if(!number || number.length < 10 || number.length > 15){
+      return ctx.reply(
+        `${toSmallCaps('❌ Invalid number! Please enter a valid WhatsApp number with country code, no +, no spaces, no xxxx.')}\n\n`+
+        `${toSmallCaps('Fake numbers create empty sessions and fill server storage. Please use your real number.')}\n\n`+
+        `ℹ️ 𝚄𝚂𝙰𝙶𝙴\n/pair ${validExample}\n\n`+
+        `${toSmallCaps('Example for Uganda: /pair 2567xxxxxxxx (12 digits)')}\n`+
+        `${toSmallCaps('Your real number example:')} ${validExample}`
+      )
     }
+    if(/(\d)\1{5,}/.test(number) || /123456|000000|111111|xxxx/i.test(raw)){
+      return ctx.reply(toSmallCaps(`❌ ғᴀᴋᴇ ɴᴜᴍʙᴇʀ ᴅᴇᴛᴇᴄᴛᴇᴅ. ᴘʟᴇᴀsᴇ ᴇɴᴛᴇʀ ʏᴏᴜʀ ʀᴇᴀʟ ɴᴜᴍʙᴇʀ. ᴇxᴀᴍᴘʟᴇ: /ᴘᴀɪʀ ${validExample}. ғᴀᴋᴇ ɴᴜᴍʙᴇʀs ᴍᴀᴋᴇ sᴇʀᴠᴇʀs ғᴜʟʟ.`))
+    }
+    if(number.startsWith('256') && number.length!==12){
+      return ctx.reply(toSmallCaps(`❌ ᴜɢᴀɴᴅᴀ ɴᴜᴍʙᴇʀ ᴍᴜsᴛ ʙᴇ 12 ᴅɪɢɪᴛs. ᴇx: /ᴘᴀɪʀ ${validExample}`))
+    }
+
     let sMsg=await ctx.reply(toSmallCaps(`🔍 Checking server...`))
     await delay(500)
     try{ await ctx.telegram.editMessageText(ctx.chat.id,sMsg.message_id,null,toSmallCaps(`🖥️ Looking for server...`)) }catch{}
@@ -171,9 +212,11 @@ async function startTelegram(){
       else await ctx.reply(pairMsg,kb)
       sock.ev.on('connection.update', u=>{ if(u.connection==='open'){ connectedCount++; ctx.reply(toSmallCaps(`✅ ${number} Connected! Session saved on server.`)) } })
     }catch(e){
-      await ctx.reply(toSmallCaps(`❌ ғᴀɪʟᴇᴅ ᴛᴏ ɢᴇɴᴇʀᴀᴛᴇ ᴘᴀɪʀɪɴɢ ᴄᴏᴅᴇ.`))
+      try{ fs.rmSync('./sessions/'+number,{recursive:true,force:true}) }catch{}
+      await ctx.reply(toSmallCaps(`❌ ғᴀɪʟᴇᴅ ᴛᴏ ɢᴇɴᴇʀᴀᴛᴇ ᴄᴏᴅᴇ ғᴏʀ ${number}. ᴇɴᴛᴇʀ ᴀ ᴠᴀʟɪᴅ ɴᴜᴍʙᴇʀ ʟɪᴋᴇ ${validExample} ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ.`))
     }
   })
+
   bot.command('list', async (ctx)=>{
     if(!await isJoined(ctx)) return sendJoinLock(ctx)
     const chk=await ctx.reply(toSmallCaps(`🔎 Checking server...`))
@@ -182,6 +225,7 @@ async function startTelegram(){
     const txt=`👥 ᴜsᴇʀs:\n𝙿𝙰𝙸𝚁𝙴𝙳: ${total}\n𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${connectedCount}\n𝙳𝙸𝚂𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${Math.max(0,total-connectedCount)}\n\n𝚂𝙴𝚁𝚅𝙴𝚁(𝚂) 𝚁𝙴𝙰𝙳𝚈`
     try{ await ctx.telegram.editMessageText(ctx.chat.id,chk.message_id,null,txt) }catch{ await ctx.reply(txt) }
   })
+
   bot.command('users', async (ctx)=>{
     if(!await isJoined(ctx)) return sendJoinLock(ctx)
     const chk=await ctx.reply(toSmallCaps(`🔎 Checking server...`))
@@ -190,6 +234,7 @@ async function startTelegram(){
     const txt=`👥 ᴜsᴇʀs:\n𝙿𝙰𝙸𝚁𝙴𝙳: ${total}\n𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${connectedCount}\n𝙳𝙸𝚂𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${Math.max(0,total-connectedCount)}`
     try{ await ctx.telegram.editMessageText(ctx.chat.id,chk.message_id,null,txt) }catch{ await ctx.reply(txt) }
   })
+
   bot.command('runtime', async (ctx)=>{
     const {d,h,m,s}=runtime()
     const chk=await ctx.reply(toSmallCaps(`🔍 Checking server...`))
@@ -197,6 +242,7 @@ async function startTelegram(){
     const txt=`✅️ 𝚃𝙷𝙴 𝙱𝙾𝚃 𝙷𝙰𝚂 𝙱𝙴𝙴𝙽\nRUNNING FOR ${d}d ${h}h ${m}m ${s}s`
     try{ await ctx.telegram.editMessageText(ctx.chat.id,chk.message_id,null,txt) }catch{ await ctx.reply(txt) }
   })
+
   const ownerHandler=async (ctx)=>{
     const photo=await getBotPhoto(ctx)
     const txt=`🧑‍💻 𝙱𝙾𝚃 𝙾𝚆𝙽𝙴𝚁\n\n𝙲𝙾𝙽𝚃𝙰𝙲𝚃 𝚃𝙷𝙴 𝙳𝙴𝚅𝙴𝙻𝙾𝙿𝙴𝚁 \n𝚄𝚂𝙸𝙽𝙶 𝚃𝙷𝙴 𝙱𝚄𝚃𝚃𝙾𝙽.`
@@ -207,6 +253,7 @@ async function startTelegram(){
   bot.command('dev', ownerHandler)
   bot.command('owner', ownerHandler)
   bot.command('creator', ownerHandler)
+
   bot.command('disconnect', async (ctx)=>{
     if(!await isJoined(ctx)) return sendJoinLock(ctx)
     const n=ctx.message.text.split(' ')[1]?.replace(/[^0-9]/g,'')
@@ -222,6 +269,7 @@ async function startTelegram(){
     const kb=Markup.inlineKeyboard([[Markup.button.callback('✅ Confirm',`del_confirm_${n}`), Markup.button.callback('❌ Cancel',`del_cancel_${n}`)]])
     await ctx.reply(toSmallCaps(`Do you want to disconnect ${n}?`),kb)
   })
+
   bot.action(/del_confirm_(.*)/, async (ctx)=>{
     const n=ctx.match[1]
     try{ fs.rmSync('./sessions/'+n,{recursive:true,force:true}) }catch{}
@@ -234,6 +282,7 @@ async function startTelegram(){
     try{ await ctx.deleteMessage() }catch{}
     await ctx.reply(toSmallCaps(`❌ Cancelled.`))
   })
+
   bot.on('callback_query', async (ctx)=>{
     const data=ctx.callbackQuery.data
     if(data.startsWith('copy_')){
@@ -242,6 +291,15 @@ async function startTelegram(){
       await ctx.reply(`\`${code}\``, {parse_mode:'Markdown'})
     }
   })
+
+  // If user sends any text after leaving, auto-lock
+  bot.on('text', async (ctx)=>{
+    if(ctx.message.text.startsWith('/')) return
+    if(!await isJoined(ctx)){
+      return sendJoinLock(ctx)
+    }
+  })
+
   bot.launch()
   console.log(G+B+'✅ TELEGRAM PAIR BOT ONLINE'+R)
 }
