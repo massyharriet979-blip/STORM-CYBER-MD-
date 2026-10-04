@@ -9,8 +9,8 @@ const BOT_TOKEN = process.env.TELEGRAM_TOKEN || ''
 const GROUP_LINK = 'https://t.me/+Tbb5cGyYLJBhMWI0'
 const CHANNEL_LINK = 'https://t.me/+oNa3ORe_1I9lMzFk'
 const OWNER_LINK = 'https://t.me/STORMX666'
-const GROUP_ID = ''
-const CHANNEL_ID = ''
+const GROUP_ID = '-1003954880229'
+const CHANNEL_ID = '-1003954880229'
 const prefix = '.'
 const commandFolder = './src/commands'
 // ==========================
@@ -35,27 +35,26 @@ function toSmallCaps(text){
 }
 
 async function isJoined(ctx){
-  if(!GROUP_ID ||!CHANNEL_ID) return true
+  if(!GROUP_ID &&!CHANNEL_ID) return true
   try{
-    const g = await ctx.telegram.getChatMember(GROUP_ID, ctx.from.id)
-    const c = await ctx.telegram.getChatMember(CHANNEL_ID, ctx.from.id)
-    return ['member','administrator','creator'].includes(g.status) && ['member','administrator','creator'].includes(c.status)
-  }catch{ return true }
+    let okG=true, okC=true
+    if(GROUP_ID){ const g=await ctx.telegram.getChatMember(GROUP_ID, ctx.from.id); okG=['member','administrator','creator'].includes(g.status) }
+    if(CHANNEL_ID){ const c=await ctx.telegram.getChatMember(CHANNEL_ID, ctx.from.id); okC=['member','administrator','creator'].includes(c.status) }
+    return okG && okC
+  }catch{ return false }
 }
 
-async function startTelegram(){
-  if(!BOT_TOKEN){ console.log(Y+'⚠️ TELEGRAM_TOKEN not set in ENV - Telegram bot disabled'+R); return }
-  const bot = new Telegraf(BOT_TOKEN)
-  bot.start(async (ctx)=>{
-    if(!await isJoined(ctx)){
-      return ctx.reply(toSmallCaps('❌ You must join group and channel first!'), Markup.inlineKeyboard([[Markup.button.url('Join Group', GROUP_LINK), Markup.button.url('Join Channel', CHANNEL_LINK)],[Markup.button.callback('✅ I Joined','check_join')]]))
-    }
-    const now = new Date()
-    const dateStr = `${now.getDate()} ${now.getMonth()+1} ${now.getFullYear()}`
-    const user = ctx.from.first_name || 'User'
-    const userId = ctx.from.id
+async function getBotPhoto(ctx){
+  try{ const me=await ctx.telegram.getMe(); const p=await ctx.telegram.getUserProfilePhotos(me.id); if(p.total_count>0) return p.photos[0][0].file_id }catch{}
+  return null
+}
 
-    const msg = `╭━─━─━─❰ 𝐒𝐓𝐎𝐑𝐌 𝐂𝐘𝐁𝐄𝐑 𝐌𝐃 ❱─━─━─━╮
+async function sendMainMenu(ctx){
+  const now=new Date()
+  const dateStr=`${now.getDate()} ${now.getMonth()+1} ${now.getFullYear()}`
+  const user=ctx.from.first_name||'User'
+  const userId=ctx.from.id
+  const msg=`╭━─━─━─❰ 𝐒𝐓𝐎𝐑𝐌 𝐂𝐘𝐁𝐄𝐑 𝐌𝐃 ❱─━─━─━╮
 ┃${toSmallCaps(`HEY 👋 ${user}`)}
 ┃${toSmallCaps('WELCOME TO STORM CYBER MD')}
 ┃${toSmallCaps('V3 VERSION')}
@@ -84,103 +83,178 @@ async function startTelegram(){
 ┃╚═══════════════════════❒
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━❐
 @STORM 𝐗 𖤍`
+  const photo=await getBotPhoto(ctx)
+  const kb=Markup.inlineKeyboard([[Markup.button.url('👥 Group', GROUP_LINK), Markup.button.url('📢 Channel', CHANNEL_LINK)],[Markup.button.url('👑 Owner', OWNER_LINK)]])
+  if(photo) await ctx.replyWithPhoto(photo,{caption:msg,...kb})
+  else await ctx.reply(msg,kb)
+}
+
+async function sendJoinLock(ctx){
+  const photo=await getBotPhoto(ctx)
+  const txt=toSmallCaps(`🚫 YOU HAVEN'T JOINED THE GROUP AND CHANNEL`)
+  const kb=Markup.inlineKeyboard([[Markup.button.url('📢 Channel', CHANNEL_LINK), Markup.button.url('👥 Group', GROUP_LINK)],[Markup.button.callback('✅ Verify','verify_join')]])
+  if(photo) await ctx.replyWithPhoto(photo,{caption:txt,...kb})
+  else await ctx.reply(txt,kb)
+}
+
+async function startTelegram(){
+  if(!BOT_TOKEN){ console.log(Y+'⚠️ TELEGRAM_TOKEN not set'+R); return }
+  const bot=new Telegraf(BOT_TOKEN)
+
+  bot.start(async (ctx)=>{
+    if(!await isJoined(ctx)) return sendJoinLock(ctx)
+    await sendMainMenu(ctx)
+  })
+
+  bot.action('verify_join', async (ctx)=>{
+    const joined=await isJoined(ctx)
+    if(!joined){
+      try{ await ctx.deleteMessage() }catch{}
+      const photo=await getBotPhoto(ctx)
+      const txt=toSmallCaps(`🚫 YOU STILL HV TO FOLLOW THIS CHANNEL OR GROUP`)
+      const kb=Markup.inlineKeyboard([[Markup.button.url('📢 Channel', CHANNEL_LINK), Markup.button.url('👥 Group', GROUP_LINK)],[Markup.button.callback('✅ Verify','verify_join')]])
+      if(photo) await ctx.replyWithPhoto(photo,{caption:txt,...kb})
+      else await ctx.reply(txt,kb)
+      return ctx.answerCbQuery(toSmallCaps('still not joined'))
+    }else{
+      try{ await ctx.deleteMessage() }catch{}
+      const photo=await getBotPhoto(ctx)
+      const txt=toSmallCaps(`✅ ACCESS GRANTED USE ANY COMMAND.`)
+      const kb=Markup.inlineKeyboard([[Markup.button.callback('🚀 Start','start_menu')]])
+      if(photo) await ctx.replyWithPhoto(photo,{caption:txt,...kb})
+      else await ctx.reply(txt,kb)
+    }
+  })
+
+  bot.action('start_menu', async (ctx)=>{
+    try{ await ctx.deleteMessage() }catch{}
+    await sendMainMenu(ctx)
+  })
+
+  // PAIR - fast direct from server
+  bot.command('pair', async (ctx)=>{
+    if(!await isJoined(ctx)) return sendJoinLock(ctx)
+    let number=ctx.message.text.split(' ')[1]?.replace(/[^0-9]/g,'')
+    if(!number){
+      const usage=`ℹ️ 𝚄𝚂𝙰𝙶𝙴\n\n/pair <number>\n\n𝙴𝙽𝚃𝙴𝚁 𝚈𝙾𝚄𝚁 𝙽𝚄𝙼𝙱𝙴𝚁 𝚆𝙸𝚃𝙷 𝙲𝙾𝚄𝙽𝚃𝚁𝚈 𝙲𝙾𝙳𝙴 — 𝙽𝙾 "+",\n\n𝙴𝚇𝙰𝙼𝙿𝙻𝙴 — /pair 2567662330xxx\n256 = 𝙲𝙾𝚄𝙽𝚃𝚁𝚈 𝙲𝙾𝙳𝙴 • 256𝚇𝚇𝚇 = 𝙿𝙷𝙾𝙽𝙴 𝙽𝚄𝙼𝙱𝙴𝚁`
+      return ctx.reply(usage)
+    }
+
+    let sMsg=await ctx.reply(toSmallCaps(`🔍 Checking server...`))
+    await delay(500)
+    try{ await ctx.telegram.editMessageText(ctx.chat.id,sMsg.message_id,null,toSmallCaps(`🖥️ Looking for server...`)) }catch{}
+    await delay(600)
 
     try{
-      const me = await ctx.telegram.getMe()
-      const photos = await ctx.telegram.getUserProfilePhotos(me.id)
-      if(photos.total_count>0){
-        await ctx.replyWithPhoto(photos.photos[0][0].file_id, {caption: msg,...Markup.inlineKeyboard([[Markup.button.url('📢 Group', GROUP_LINK), Markup.button.url('📣 Channel', CHANNEL_LINK)],[Markup.button.url('👑 Owner', OWNER_LINK)]])})
-      }else throw 'no photo'
-    }catch{
-      await ctx.reply(msg, Markup.inlineKeyboard([[Markup.button.url('📢 Group', GROUP_LINK), Markup.button.url('📣 Channel', CHANNEL_LINK)],[Markup.button.url('👑 Owner', OWNER_LINK)]]))
+      const { version } = await fetchLatestBaileysVersion()
+      const { state, saveCreds } = await useMultiFileAuthState('./sessions/'+number)
+      const sock = makeWASocket({
+        version, logger:pino({level:'silent'}),
+        auth:{creds:state.creds, keys:makeCacheableSignalKeyStore(state.keys,pino({level:'silent'}))},
+        browser:Browsers.macOS('Safari'),
+        printQRInTerminal:false, syncFullHistory:false, markOnlineOnConnect:false,
+        connectTimeoutMs:60000, keepAliveIntervalMs:15000, defaultQueryTimeoutMs:60000,
+        emitOwnEvents:false, generateHighQualityLinkPreview:false
+      })
+      sock.ev.on('creds.update', saveCreds)
+      try{ await ctx.telegram.editMessageText(ctx.chat.id,sMsg.message_id,null,toSmallCaps(`🔗 Opening socket for ${number}...`)) }catch{}
+      await delay(3500)
+      const code=await sock.requestPairingCode(number)
+      const clean=code.replace(/-/g,'').toUpperCase()
+
+      const pairMsg=`${toSmallCaps('🔥 Pairing code generated')}\n\n📲 ${toSmallCaps(`NUM: ${number}`)}\n\n>> ${clean} <<\n\n${toSmallCaps('Open whatsapp > Linked devices > Link with phone number, and enter the code.')}\n> ${toSmallCaps('CODE EXPIRES IN 60 SECONDS')}\n@STORM X 𖤍`
+      const photo=await getBotPhoto(ctx)
+      const kb=Markup.inlineKeyboard([[Markup.button.callback(`📋 ${clean}`,`copy_${clean}`)],[Markup.button.url('👥 Group',GROUP_LINK), Markup.button.url('📢 Channel',CHANNEL_LINK)],[Markup.button.url('👑 Owner',OWNER_LINK)]])
+      if(photo) await ctx.replyWithPhoto(photo,{caption:pairMsg,...kb})
+      else await ctx.reply(pairMsg,kb)
+
+      sock.ev.on('connection.update', u=>{ if(u.connection==='open'){ connectedCount++; ctx.reply(toSmallCaps(`✅ ${number} Connected! Session saved on server.`)) } })
+    }catch(e){
+      await ctx.reply(toSmallCaps(`❌ ғᴀɪʟᴇᴅ ᴛᴏ ɢᴇɴᴇʀᴀᴛᴇ ʏᴏᴜʀ ᴘᴀɪʀɪɴɢ ᴄᴏᴅᴇ.\n ɴᴜᴍ: ${number}. ᴘʟᴇᴀsᴇ ᴡᴀɪᴛ 1 ᴍɪɴᴜᴛᴇs ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ. (ᴄᴏɴɴᴇᴄᴛɪᴏɴ ᴄʟᴏsᴇᴅ)`))
     }
   })
 
-  bot.action('check_join', async (ctx)=>{
-    if(await isJoined(ctx)){ ctx.deleteMessage(); ctx.reply(toSmallCaps('✅ Joined! Now use /pair')) }
-    else ctx.answerCbQuery(toSmallCaps('❌ You haven\'t joined yet!'))
-  })
-
-  // ===== PAIR COMMAND - FIXED TO TAKE ITS TIME =====
-  bot.command('pair', async (ctx)=>{
-    if(!await isJoined(ctx)) return ctx.reply(toSmallCaps('❌ Join Group and Channel first!'), Markup.inlineKeyboard([[Markup.button.url('Join Group', GROUP_LINK), Markup.button.url('Join Channel', CHANNEL_LINK)]]))
-    let number = ctx.message.text.split(' ')[1]?.replace(/[^0-9]/g,'')
-    if(!number) return ctx.reply(toSmallCaps('Usage: /pair 2567xxxxxxx'))
-
-    let sMsg = await ctx.reply(toSmallCaps('🔍 Looking for available servers...'))
+  bot.command('list', async (ctx)=>{
+    if(!await isJoined(ctx)) return sendJoinLock(ctx)
+    const chk=await ctx.reply(toSmallCaps(`🔎 Checking server...`))
     await delay(800)
-    try{ await ctx.telegram.editMessageText(ctx.chat.id, sMsg.message_id, null, toSmallCaps(`🖥️ Server found: storm-server-0${Math.floor(Math.random()*9)+1} | Connecting to ${number}...`)) }catch{}
+    const total=countUsers()
+    const online=connectedCount
+    const disconnected=Math.max(0,total-online)
+    const txt=`👥 ᴜsᴇʀs:\n𝙿𝙰𝙸𝚁𝙴𝙳: ${total}\n𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${online}\n𝙳𝙸𝚂𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${disconnected}\n\n𝚂𝙴𝚁𝚅𝙴𝚁(𝚂) 𝚁𝙴𝙰𝙳𝚈`
+    try{ await ctx.telegram.editMessageText(ctx.chat.id,chk.message_id,null,txt) }catch{ await ctx.reply(txt) }
+  })
 
-    let codeGenerated = false
-    let lastError = 'Unknown error'
+  bot.command('users', async (ctx)=>{
+    if(!await isJoined(ctx)) return sendJoinLock(ctx)
+    const chk=await ctx.reply(toSmallCaps(`🔎 Checking server...`))
+    await delay(700)
+    const total=countUsers()
+    const online=connectedCount
+    const disconnected=Math.max(0,total-online)
+    const txt=`👥 ᴜsᴇʀs:\n𝙿𝙰𝙸𝚁𝙴𝙳: ${total}\n𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${online}\n𝙳𝙸𝚂𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${disconnected}\n\n𝚂𝙴𝚁𝚅𝙴𝚁(𝚂) 𝚁𝙴𝙰𝙳𝚈`
+    try{ await ctx.telegram.editMessageText(ctx.chat.id,chk.message_id,null,txt) }catch{ await ctx.reply(txt) }
+  })
 
-    for(let attempt = 1; attempt <= 3; attempt++){
-      try{
-        try{ await ctx.telegram.editMessageText(ctx.chat.id, sMsg.message_id, null, toSmallCaps(`🔗 Opening socket for ${number}... Attempt ${attempt}/3`)) }catch{}
+  bot.command('runtime', async (ctx)=>{
+    const {d,h,m,s}=runtime()
+    const chk=await ctx.reply(toSmallCaps(`🔍 Checking server...`))
+    await delay(600)
+    const txt=`✅️ 𝚃𝙷𝙴 𝙱𝙾𝚃 𝙷𝙰𝚂 𝙱𝙴𝙴𝙽\nRUNNING FOR ${d}d ${h}h ${m}m ${s}s`
+    try{ await ctx.telegram.editMessageText(ctx.chat.id,chk.message_id,null,txt) }catch{ await ctx.reply(txt) }
+  })
 
-        const { version } = await fetchLatestBaileysVersion()
-        const { state, saveCreds } = await useMultiFileAuthState('./sessions/'+number)
+  const ownerHandler=async (ctx)=>{
+    const photo=await getBotPhoto(ctx)
+    const txt=`🧑‍💻 𝙱𝙾𝚃 𝙾𝚆𝙽𝙴𝚁\n\n𝙲𝙾𝙽𝚃𝙰𝙲𝚃 𝚃𝙷𝙴 𝙳𝙴𝚅𝙴𝙻𝙾𝙿𝙴𝚁 \n𝚄𝚂𝙸𝙽𝙶 𝚃𝙷𝙴 𝙱𝚄𝚃𝚃𝙾𝙽.`
+    const kb=Markup.inlineKeyboard([[Markup.button.url('💬 Developer',OWNER_LINK)]])
+    if(photo) await ctx.replyWithPhoto(photo,{caption:txt,...kb})
+    else await ctx.reply(txt,kb)
+  }
+  bot.command('dev', ownerHandler)
+  bot.command('owner', ownerHandler)
+  bot.command('creator', ownerHandler)
 
-        const sock = makeWASocket({
-          version,
-          logger: pino({ level: 'silent' }),
-          auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })) },
-          browser: Browsers.macOS('Safari'),
-          printQRInTerminal:false,
-          syncFullHistory:false,
-          markOnlineOnConnect:false,
-          connectTimeoutMs: 60000,
-          keepAliveIntervalMs: 15000,
-          defaultQueryTimeoutMs: 60000,
-          emitOwnEvents: false,
-          generateHighQualityLinkPreview: false
-        })
-        sock.ev.on('creds.update', saveCreds)
-
-        await delay(5000)
-
-        const code = await sock.requestPairingCode(number)
-        if(!code) throw new Error('No code returned')
-
-        const clean = code.replace(/-/g,'').toUpperCase()
-        codeGenerated = true
-
-        const pairMsg = `${toSmallCaps('🔥 Pairing code generated')}\n\n📲 ${toSmallCaps(`NUM: ${number}`)}\n\n>> ${clean} <<\n\n${toSmallCaps('Open whatsapp >')} \n${toSmallCaps('Linked devices >')} \n${toSmallCaps('Link with phone number,')} \n${toSmallCaps('And enter the code.')}\n> ${toSmallCaps('CODE EXPIRES IN 60 SECONDS')}\n@STORM X 𖤍`
-
-        try{
-          const me = await ctx.telegram.getMe()
-          const photos = await ctx.telegram.getUserProfilePhotos(me.id)
-          if(photos.total_count>0){
-            await ctx.replyWithPhoto(photos.photos[0][0].file_id, { caption: pairMsg,...Markup.inlineKeyboard([ [Markup.button.callback(`📋 ${clean}`, `copy_${clean}`)], [Markup.button.url('📢 Group', GROUP_LINK), Markup.button.url('📣 Channel', CHANNEL_LINK)], [Markup.button.url('👑 Creator', OWNER_LINK)] ]) })
-          }else throw 'no photo'
-        }catch{
-          await ctx.reply(pairMsg, Markup.inlineKeyboard([ [Markup.button.callback(`📋 COPY CODE: ${clean}`, `copy_${clean}`)], [Markup.button.url('📢 Group', GROUP_LINK), Markup.button.url('📣 Channel', CHANNEL_LINK)], [Markup.button.url('👑 Creator', OWNER_LINK)] ]))
-        }
-        sock.ev.on('connection.update', u=>{ if(u.connection==='open'){ connectedCount++; ctx.reply(toSmallCaps(`✅ ${number} Connected!`)) } })
-        break
-
-      }catch(e){
-        lastError = e.message || 'Connection Closed'
-        console.log(`Attempt ${attempt} failed: ${lastError}`)
-        if(attempt < 3){
-          try{ await ctx.telegram.editMessageText(ctx.chat.id, sMsg.message_id, null, toSmallCaps(`⏳ Attempt ${attempt} failed (${lastError}), retrying in 3s...`)) }catch{}
-          await delay(3000)
-        }
-      }
+  bot.command('disconnect', async (ctx)=>{
+    if(!await isJoined(ctx)) return sendJoinLock(ctx)
+    const n=ctx.message.text.split(' ')[1]?.replace(/[^0-9]/g,'')
+    if(!n){
+      return ctx.reply(`ℹ️ 𝚄𝚂𝙰𝙶𝙴\n\n/disconnect <number>\n\n𝙴𝚇𝙰𝙼𝙿𝙻𝙴 — /disconnect 2567662330xxx`)
     }
+    const chk=await ctx.reply(toSmallCaps(`🔎 Checking server...`))
+    await delay(800)
+    const exists=fs.existsSync('./sessions/'+n)
+    if(!exists){
+      try{ await ctx.telegram.editMessageText(ctx.chat.id,chk.message_id,null,toSmallCaps(`⚠️ 𝙽𝙾 𝚂𝙴𝚂𝚂𝙸𝙾𝙽 𝙵𝙾𝚄𝙽𝙳 𝙵𝙾𝚁 𝚃𝙷𝙸𝚂 𝙽𝚄𝙼𝙱𝙴𝚁.`)) }catch{ await ctx.reply(toSmallCaps(`⚠️ 𝙽𝙾 𝚂𝙴𝚂𝚂𝙸𝙾𝙽 𝙵𝙾𝚄𝙽𝙳 𝙵𝙾𝚁 𝚃𝙷𝙸𝚂 𝙽𝚄𝙼𝙱𝙴𝚁.`)) }
+      return
+    }
+    try{ await ctx.telegram.editMessageText(ctx.chat.id,chk.message_id,null,toSmallCaps(`✅️ SESSION FOR ${n} FOUND`)) }catch{}
+    const kb=Markup.inlineKeyboard([[Markup.button.callback('✅ Confirm',`del_confirm_${n}`), Markup.button.callback('❌ Cancel',`del_cancel_${n}`)]])
+    await ctx.reply(toSmallCaps(`Do you want to disconnect ${n}?`),kb)
+  })
 
-    if(!codeGenerated){
-      await ctx.reply(toSmallCaps(`❌ FAILED TO GENERATE YOUR PAIRING CODE for ${number}. Please wait 2 minutes and try again. (${lastError})`))
+  bot.action(/del_confirm_(.*)/, async (ctx)=>{
+    const n=ctx.match[1]
+    try{ fs.rmSync('./sessions/'+n,{recursive:true,force:true}) }catch{}
+    await ctx.answerCbQuery(toSmallCaps('deleted'))
+    try{ await ctx.deleteMessage() }catch{}
+    await ctx.reply(toSmallCaps(`✅ Session ${n} disconnected and deleted from server.`))
+  })
+  bot.action(/del_cancel_(.*)/, async (ctx)=>{
+    await ctx.answerCbQuery(toSmallCaps('cancelled'))
+    try{ await ctx.deleteMessage() }catch{}
+    await ctx.reply(toSmallCaps(`❌ Cancelled. Session not deleted.`))
+  })
+
+  bot.on('callback_query', async (ctx)=>{
+    const data=ctx.callbackQuery.data
+    if(data.startsWith('copy_')){
+      const code=data.replace('copy_','')
+      await ctx.answerCbQuery(toSmallCaps(`Code: ${code}`))
+      await ctx.reply(`\`${code}\``, {parse_mode:'Markdown'})
     }
   })
 
-  bot.command('list', ctx=> ctx.reply(toSmallCaps(`📂 Sessions: ${countUsers()} | Online: ${connectedCount}`)))
-  bot.command('users', ctx=> ctx.reply(toSmallCaps(`👥 Total users: ${countUsers()} | Online now: ${connectedCount}`)))
-  bot.command('runtime', ctx=>{ const {d,h,m,s}=runtime(); ctx.reply(toSmallCaps(`⏱️ ${d}d ${h}h ${m}m ${s}s`)) })
-  bot.command('dev', ctx=> ctx.reply(toSmallCaps('👑 Owner'), Markup.inlineKeyboard([[Markup.button.url('Contact', OWNER_LINK)]])))
-  bot.command('creator', ctx=> ctx.reply(toSmallCaps('👑 STORM X - CREATOR'), Markup.inlineKeyboard([[Markup.button.url('Contact Creator', OWNER_LINK)]])))
-  bot.command('disconnect', ctx=>{ const n=ctx.message.text.split(' ')[1]?.replace(/[^0-9]/g,''); if(!n) return ctx.reply(toSmallCaps('Usage: /disconnect 2567...')); try{ fs.rmSync('./sessions/'+n,{recursive:true,force:true}); ctx.reply(toSmallCaps(`✅ ${n} deleted`))}catch{ctx.reply(toSmallCaps('❌ Not found'))} })
-  bot.on('callback_query', async (ctx)=>{ const data = ctx.callbackQuery.data; if(data.startsWith('copy_')){ const code = data.replace('copy_',''); await ctx.answerCbQuery(toSmallCaps(`Code: ${code}`)); await ctx.reply(`\`${code}\``, {parse_mode:'Markdown'}) } })
   bot.launch()
   console.log(G+B+'✅ TELEGRAM PAIR BOT ONLINE'+R)
 }
@@ -190,60 +264,43 @@ async function startWhatsApp(){
   const { version } = await fetchLatestBaileysVersion()
   const { state, saveCreds } = await useMultiFileAuthState('./src/database/session')
   const sock = makeWASocket({
-    version,
-    logger: pino({ level: 'silent' }),
-    auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })) },
-    browser: Browsers.ubuntu('Chrome'),
-    printQRInTerminal:false,
-    syncFullHistory:false,
-    markOnlineOnConnect:false,
-    connectTimeoutMs: 60000,
-    keepAliveIntervalMs: 15000,
-    defaultQueryTimeoutMs: 60000
+    version, logger:pino({level:'silent'}),
+    auth:{creds:state.creds, keys:makeCacheableSignalKeyStore(state.keys,pino({level:'silent'}))},
+    browser:Browsers.ubuntu('Chrome'), printQRInTerminal:false, syncFullHistory:false, markOnlineOnConnect:false,
+    connectTimeoutMs:60000, keepAliveIntervalMs:15000, defaultQueryTimeoutMs:60000
   })
   sock.ev.on('creds.update', saveCreds)
   if(!state.creds.registered){
-    let num = (process.env.MAIN_NUMBER || '').replace(/[^0-9]/g,'')
+    let num=(process.env.MAIN_NUMBER||'').replace(/[^0-9]/g,'')
     if(!num){
-      if(process.stdin.isTTY){
-        num = await ask(C+B+'📱 Enter main bot number (2567xxxxxxx): '+R)
-        num = num.replace(/[^0-9]/g,'')
-      } else {
-        console.log(Y+'⚠️ No session found! Set MAIN_NUMBER in Railway Variables to pair once, or upload src/database/session folder'+R)
-        console.log(Y+'Bot will wait 10s and retry...'+R)
-        await delay(10000)
-        return startWhatsApp()
-      }
+      if(process.stdin.isTTY){ num=await ask(C+B+'📱 Enter main bot number (2567xxxxxxx): '+R); num=num.replace(/[^0-9]/g,'') }
+      else { console.log(Y+'Set MAIN_NUMBER in Railway'+R); await delay(10000); return startWhatsApp() }
     }
     if(num){
       console.log(Y+'⏳ Requesting pairing code for '+num+'...'+R)
       await delay(4000)
-      try{
-        let code
-        try { code = await sock.requestPairingCode(num) } catch { await delay(3000); code = await sock.requestPairingCode(num) }
-        console.log(G+B+`\n CODE FOR ${num}: ${code} \n`+R)
-      }catch(e){ console.log(Rd+e.message+R) }
+      try{ let code; try{code=await sock.requestPairingCode(num)}catch{ await delay(3000); code=await sock.requestPairingCode(num) } console.log(G+B+`\n CODE FOR ${num}: ${code} \n`+R) }catch(e){ console.log(Rd+e.message+R) }
     }
   }
   sock.ev.on('connection.update', u=>{
-    if(u.connection==='open'){ console.log(G+B+'\n✅ WHATSAPP BOT CONNECTED!\n'+R); connectedCount++; try{ rl.close() }catch{} }
+    if(u.connection==='open'){ console.log(G+B+'\n✅ WHATSAPP BOT CONNECTED!\n'+R); connectedCount++; try{rl.close()}catch{} }
     if(u.connection==='close'){ console.log(Rd+'WhatsApp closed, restarting 3s...'+R); setTimeout(startWhatsApp,3000) }
   })
-  const commands = new Map()
+  const commands=new Map()
   try{
-    const files = fs.readdirSync(commandFolder)
-    for(const f of files){ if(!f.endsWith('.js')) continue; try{ const mod=await import(commandFolder+'/'+f+'?v='+Date.now()); if(mod.default?.name){ commands.set(mod.default.name.toLowerCase(), mod.default); if(mod.default.alias) mod.default.alias.forEach(a=> commands.set(a.toLowerCase(), mod.default)) } }catch(e){ console.log(`Failed ${f}: ${e.message}`) } } }
-  catch(e){ console.log('Command load error '+e.message) }
+    const files=fs.readdirSync(commandFolder)
+    for(const f of files){ if(!f.endsWith('.js')) continue; try{ const mod=await import(commandFolder+'/'+f+'?v='+Date.now()); if(mod.default?.name){ commands.set(mod.default.name.toLowerCase(),mod.default); if(mod.default.alias) mod.default.alias.forEach(a=>commands.set(a.toLowerCase(),mod.default)) } }catch(e){ console.log(`Failed ${f}: ${e.message}`) } }
+  }catch(e){ console.log('Command load error '+e.message) }
   console.log(C+`Loaded ${commands.size} WhatsApp commands`+R)
   sock.ev.on('messages.upsert', async m=>{
     try{
       const msg=m.messages[0]; if(!msg.message) return
       if(msg.key.remoteJid=='status@broadcast') return
-      let body = msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.imageMessage?.caption || msg.message.videoMessage?.caption || ''
+      let body=msg.message.conversation||msg.message.extendedTextMessage?.text||msg.message.imageMessage?.caption||msg.message.videoMessage?.caption||''
       if(!body.startsWith(prefix)) return
       let name=body.slice(1).split(' ')[0].toLowerCase()
       let cmd=commands.get(name)
-      if(cmd){ if(cmd.execute.length===3) await cmd.execute(sock, m.messages[0].key.remoteJid, msg); else await cmd.execute(sock, m.messages[0].key.remoteJid, msg, [], {isOwner:true}) }
+      if(cmd){ if(cmd.execute.length===3) await cmd.execute(sock,m.messages[0].key.remoteJid,msg); else await cmd.execute(sock,m.messages[0].key.remoteJid,msg,[],{isOwner:true}) }
     }catch{}
   })
 }
