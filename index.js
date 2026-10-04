@@ -4,7 +4,6 @@ import pino from 'pino'
 import fs from 'fs'
 import readline from 'readline'
 
-// ========= CONFIG =========
 const BOT_TOKEN = process.env.TELEGRAM_TOKEN || ''
 const GROUP_LINK = 'https://t.me/+Tbb5cGyYLJBhMWI0'
 const CHANNEL_LINK = 'https://t.me/+oNa3ORe_1I9lMzFk'
@@ -13,7 +12,6 @@ const GROUP_ID = '-1003954880229'
 const CHANNEL_ID = '-1003954880229'
 const prefix = '.'
 const commandFolder = './src/commands'
-// ==========================
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
 const ask = (q) => new Promise(res => rl.question(q, res))
@@ -34,14 +32,29 @@ function toSmallCaps(text){
   return text.toLowerCase().split('').map(c=>map[c]||c).join('')
 }
 
+// FIXED isJoined - checks once if same ID, and doesn't block if bot not admin
 async function isJoined(ctx){
-  if(!GROUP_ID &&!CHANNEL_ID) return true
+  if(!GROUP_ID) return true
   try{
-    let okG=true, okC=true
-    if(GROUP_ID){ const g=await ctx.telegram.getChatMember(GROUP_ID, ctx.from.id); okG=['member','administrator','creator'].includes(g.status) }
-    if(CHANNEL_ID){ const c=await ctx.telegram.getChatMember(CHANNEL_ID, ctx.from.id); okC=['member','administrator','creator'].includes(c.status) }
-    return okG && okC
-  }catch{ return false }
+    // If same ID for both, check only once
+    if(GROUP_ID === CHANNEL_ID){
+      const m = await ctx.telegram.getChatMember(GROUP_ID, ctx.from.id)
+      const ok = ['member','administrator','creator'].includes(m.status)
+      console.log(`Check ${ctx.from.id} in ${GROUP_ID}: ${m.status} => ${ok}`)
+      return ok
+    }
+    const g = await ctx.telegram.getChatMember(GROUP_ID, ctx.from.id)
+    const okG = ['member','administrator','creator'].includes(g.status)
+    if(!okG) return false
+    if(CHANNEL_ID){
+      const c = await ctx.telegram.getChatMember(CHANNEL_ID, ctx.from.id)
+      return ['member','administrator','creator'].includes(c.status)
+    }
+    return okG
+  }catch(e){
+    console.log('isJoined error (bot must be admin):', e.message)
+    return true // don't lock if bot not admin, to avoid forcing loop
+  }
 }
 
 async function getBotPhoto(ctx){
@@ -61,7 +74,6 @@ async function sendMainMenu(ctx){
 ┃${toSmallCaps(`USER ID: ${userId}`)}
 ┃━━━━━━━━━━━━━━━━━━━━━━━━━━━❐
 ┃╔══『 🛡️ CYBER PAIR SYSTEM 🛡️ 』══❒
-┃║ ★★★★★★★★★★★★★★★★★★★★★
 ┃║ ★┏━━━━━━『 BOT INFO 』━━━━━━
 ┃║ ★│ ➣ ${toSmallCaps('BOT : STORM CYBER MD')}
 ┃║ ★│ ➣ ${toSmallCaps('VERSION : v2.0.0')}
@@ -70,7 +82,6 @@ async function sendMainMenu(ctx){
 ┃║ ★│ ➣ ${toSmallCaps(`DATE : ${dateStr}`)}
 ┃║ ★│ ➣ ${toSmallCaps('PREFIX : /')}
 ┃║ ★└─────
-┃║
 ┃║ ★┌─── ( COMMANDS )
 ┃║ ★│ ➣ /pair - ${toSmallCaps('CONNECT A NUMBER')}
 ┃║ ★│ ➣ /disconnect - ${toSmallCaps('DISCONNECT')}
@@ -100,12 +111,10 @@ async function sendJoinLock(ctx){
 async function startTelegram(){
   if(!BOT_TOKEN){ console.log(Y+'⚠️ TELEGRAM_TOKEN not set'+R); return }
   const bot=new Telegraf(BOT_TOKEN)
-
   bot.start(async (ctx)=>{
     if(!await isJoined(ctx)) return sendJoinLock(ctx)
     await sendMainMenu(ctx)
   })
-
   bot.action('verify_join', async (ctx)=>{
     const joined=await isJoined(ctx)
     if(!joined){
@@ -125,26 +134,20 @@ async function startTelegram(){
       else await ctx.reply(txt,kb)
     }
   })
-
   bot.action('start_menu', async (ctx)=>{
     try{ await ctx.deleteMessage() }catch{}
     await sendMainMenu(ctx)
   })
-
-  // PAIR - fast direct from server
   bot.command('pair', async (ctx)=>{
     if(!await isJoined(ctx)) return sendJoinLock(ctx)
     let number=ctx.message.text.split(' ')[1]?.replace(/[^0-9]/g,'')
     if(!number){
-      const usage=`ℹ️ 𝚄𝚂𝙰𝙶𝙴\n\n/pair <number>\n\n𝙴𝙽𝚃𝙴𝚁 𝚈𝙾𝚄𝚁 𝙽𝚄𝙼𝙱𝙴𝚁 𝚆𝙸𝚃𝙷 𝙲𝙾𝚄𝙽𝚃𝚁𝚈 𝙲𝙾𝙳𝙴 — 𝙽𝙾 "+",\n\n𝙴𝚇𝙰𝙼𝙿𝙻𝙴 — /pair 2567662330xxx\n256 = 𝙲𝙾𝚄𝙽𝚃𝚁𝚈 𝙲𝙾𝙳𝙴 • 256𝚇𝚇𝚇 = 𝙿𝙷𝙾𝙽𝙴 𝙽𝚄𝙼𝙱𝙴𝚁`
-      return ctx.reply(usage)
+      return ctx.reply(`ℹ️ 𝚄𝚂𝙰𝙶𝙴\n\n/pair <number>\n\n𝙴𝙽𝚃𝙴𝚁 𝚈𝙾𝚄𝚁 𝙽𝚄𝙼𝙱𝙴𝚁 𝚆𝙸𝚃𝙷 𝙲𝙾𝚄𝙽𝚃𝚁𝚈 𝙲𝙾𝙳𝙴 — 𝙽𝙾 "+",\n\n𝙴𝚇𝙰𝙼𝙿𝙻𝙴 — /pair 2567662330xxx`)
     }
-
     let sMsg=await ctx.reply(toSmallCaps(`🔍 Checking server...`))
     await delay(500)
     try{ await ctx.telegram.editMessageText(ctx.chat.id,sMsg.message_id,null,toSmallCaps(`🖥️ Looking for server...`)) }catch{}
     await delay(600)
-
     try{
       const { version } = await fetchLatestBaileysVersion()
       const { state, saveCreds } = await useMultiFileAuthState('./sessions/'+number)
@@ -161,41 +164,32 @@ async function startTelegram(){
       await delay(3500)
       const code=await sock.requestPairingCode(number)
       const clean=code.replace(/-/g,'').toUpperCase()
-
       const pairMsg=`${toSmallCaps('🔥 Pairing code generated')}\n\n📲 ${toSmallCaps(`NUM: ${number}`)}\n\n>> ${clean} <<\n\n${toSmallCaps('Open whatsapp > Linked devices > Link with phone number, and enter the code.')}\n> ${toSmallCaps('CODE EXPIRES IN 60 SECONDS')}\n@STORM X 𖤍`
       const photo=await getBotPhoto(ctx)
       const kb=Markup.inlineKeyboard([[Markup.button.callback(`📋 ${clean}`,`copy_${clean}`)],[Markup.button.url('👥 Group',GROUP_LINK), Markup.button.url('📢 Channel',CHANNEL_LINK)],[Markup.button.url('👑 Owner',OWNER_LINK)]])
       if(photo) await ctx.replyWithPhoto(photo,{caption:pairMsg,...kb})
       else await ctx.reply(pairMsg,kb)
-
       sock.ev.on('connection.update', u=>{ if(u.connection==='open'){ connectedCount++; ctx.reply(toSmallCaps(`✅ ${number} Connected! Session saved on server.`)) } })
     }catch(e){
-      await ctx.reply(toSmallCaps(`❌ ғᴀɪʟᴇᴅ ᴛᴏ ɢᴇɴᴇʀᴀᴛᴇ ʏᴏᴜʀ ᴘᴀɪʀɪɴɢ ᴄᴏᴅᴇ.\n ɴᴜᴍ: ${number}. ᴘʟᴇᴀsᴇ ᴡᴀɪᴛ 1 ᴍɪɴᴜᴛᴇs ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ. (ᴄᴏɴɴᴇᴄᴛɪᴏɴ ᴄʟᴏsᴇᴅ)`))
+      await ctx.reply(toSmallCaps(`❌ ғᴀɪʟᴇᴅ ᴛᴏ ɢᴇɴᴇʀᴀᴛᴇ ᴘᴀɪʀɪɴɢ ᴄᴏᴅᴇ.`))
     }
   })
-
   bot.command('list', async (ctx)=>{
     if(!await isJoined(ctx)) return sendJoinLock(ctx)
     const chk=await ctx.reply(toSmallCaps(`🔎 Checking server...`))
     await delay(800)
     const total=countUsers()
-    const online=connectedCount
-    const disconnected=Math.max(0,total-online)
-    const txt=`👥 ᴜsᴇʀs:\n𝙿𝙰𝙸𝚁𝙴𝙳: ${total}\n𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${online}\n𝙳𝙸𝚂𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${disconnected}\n\n𝚂𝙴𝚁𝚅𝙴𝚁(𝚂) 𝚁𝙴𝙰𝙳𝚈`
+    const txt=`👥 ᴜsᴇʀs:\n𝙿𝙰𝙸𝚁𝙴𝙳: ${total}\n𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${connectedCount}\n𝙳𝙸𝚂𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${Math.max(0,total-connectedCount)}\n\n𝚂𝙴𝚁𝚅𝙴𝚁(𝚂) 𝚁𝙴𝙰𝙳𝚈`
     try{ await ctx.telegram.editMessageText(ctx.chat.id,chk.message_id,null,txt) }catch{ await ctx.reply(txt) }
   })
-
   bot.command('users', async (ctx)=>{
     if(!await isJoined(ctx)) return sendJoinLock(ctx)
     const chk=await ctx.reply(toSmallCaps(`🔎 Checking server...`))
     await delay(700)
     const total=countUsers()
-    const online=connectedCount
-    const disconnected=Math.max(0,total-online)
-    const txt=`👥 ᴜsᴇʀs:\n𝙿𝙰𝙸𝚁𝙴𝙳: ${total}\n𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${online}\n𝙳𝙸𝚂𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${disconnected}\n\n𝚂𝙴𝚁𝚅𝙴𝚁(𝚂) 𝚁𝙴𝙰𝙳𝚈`
+    const txt=`👥 ᴜsᴇʀs:\n𝙿𝙰𝙸𝚁𝙴𝙳: ${total}\n𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${connectedCount}\n𝙳𝙸𝚂𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${Math.max(0,total-connectedCount)}`
     try{ await ctx.telegram.editMessageText(ctx.chat.id,chk.message_id,null,txt) }catch{ await ctx.reply(txt) }
   })
-
   bot.command('runtime', async (ctx)=>{
     const {d,h,m,s}=runtime()
     const chk=await ctx.reply(toSmallCaps(`🔍 Checking server...`))
@@ -203,7 +197,6 @@ async function startTelegram(){
     const txt=`✅️ 𝚃𝙷𝙴 𝙱𝙾𝚃 𝙷𝙰𝚂 𝙱𝙴𝙴𝙽\nRUNNING FOR ${d}d ${h}h ${m}m ${s}s`
     try{ await ctx.telegram.editMessageText(ctx.chat.id,chk.message_id,null,txt) }catch{ await ctx.reply(txt) }
   })
-
   const ownerHandler=async (ctx)=>{
     const photo=await getBotPhoto(ctx)
     const txt=`🧑‍💻 𝙱𝙾𝚃 𝙾𝚆𝙽𝙴𝚁\n\n𝙲𝙾𝙽𝚃𝙰𝙲𝚃 𝚃𝙷𝙴 𝙳𝙴𝚅𝙴𝙻𝙾𝙿𝙴𝚁 \n𝚄𝚂𝙸𝙽𝙶 𝚃𝙷𝙴 𝙱𝚄𝚃𝚃𝙾𝙽.`
@@ -214,38 +207,33 @@ async function startTelegram(){
   bot.command('dev', ownerHandler)
   bot.command('owner', ownerHandler)
   bot.command('creator', ownerHandler)
-
   bot.command('disconnect', async (ctx)=>{
     if(!await isJoined(ctx)) return sendJoinLock(ctx)
     const n=ctx.message.text.split(' ')[1]?.replace(/[^0-9]/g,'')
-    if(!n){
-      return ctx.reply(`ℹ️ 𝚄𝚂𝙰𝙶𝙴\n\n/disconnect <number>\n\n𝙴𝚇𝙰𝙼𝙿𝙻𝙴 — /disconnect 2567662330xxx`)
-    }
+    if(!n) return ctx.reply(`ℹ️ 𝚄𝚂𝙰𝙶𝙴\n\n/disconnect <number>`)
     const chk=await ctx.reply(toSmallCaps(`🔎 Checking server...`))
     await delay(800)
     const exists=fs.existsSync('./sessions/'+n)
     if(!exists){
-      try{ await ctx.telegram.editMessageText(ctx.chat.id,chk.message_id,null,toSmallCaps(`⚠️ 𝙽𝙾 𝚂𝙴𝚂𝚂𝙸𝙾𝙽 𝙵𝙾𝚄𝙽𝙳 𝙵𝙾𝚁 𝚃𝙷𝙸𝚂 𝙽𝚄𝙼𝙱𝙴𝚁.`)) }catch{ await ctx.reply(toSmallCaps(`⚠️ 𝙽𝙾 𝚂𝙴𝚂𝚂𝙸𝙾𝙽 𝙵𝙾𝚄𝙽𝙳 𝙵𝙾𝚁 𝚃𝙷𝙸𝚂 𝙽𝚄𝙼𝙱𝙴𝚁.`)) }
+      try{ await ctx.telegram.editMessageText(ctx.chat.id,chk.message_id,null,toSmallCaps(`⚠️ 𝙽𝙾 𝚂𝙴𝚂𝚂𝙸𝙾𝙽 𝙵𝙾𝚄𝙽𝙳.`)) }catch{}
       return
     }
     try{ await ctx.telegram.editMessageText(ctx.chat.id,chk.message_id,null,toSmallCaps(`✅️ SESSION FOR ${n} FOUND`)) }catch{}
     const kb=Markup.inlineKeyboard([[Markup.button.callback('✅ Confirm',`del_confirm_${n}`), Markup.button.callback('❌ Cancel',`del_cancel_${n}`)]])
     await ctx.reply(toSmallCaps(`Do you want to disconnect ${n}?`),kb)
   })
-
   bot.action(/del_confirm_(.*)/, async (ctx)=>{
     const n=ctx.match[1]
     try{ fs.rmSync('./sessions/'+n,{recursive:true,force:true}) }catch{}
     await ctx.answerCbQuery(toSmallCaps('deleted'))
     try{ await ctx.deleteMessage() }catch{}
-    await ctx.reply(toSmallCaps(`✅ Session ${n} disconnected and deleted from server.`))
+    await ctx.reply(toSmallCaps(`✅ Session ${n} disconnected.`))
   })
   bot.action(/del_cancel_(.*)/, async (ctx)=>{
     await ctx.answerCbQuery(toSmallCaps('cancelled'))
     try{ await ctx.deleteMessage() }catch{}
-    await ctx.reply(toSmallCaps(`❌ Cancelled. Session not deleted.`))
+    await ctx.reply(toSmallCaps(`❌ Cancelled.`))
   })
-
   bot.on('callback_query', async (ctx)=>{
     const data=ctx.callbackQuery.data
     if(data.startsWith('copy_')){
@@ -254,7 +242,6 @@ async function startTelegram(){
       await ctx.reply(`\`${code}\``, {parse_mode:'Markdown'})
     }
   })
-
   bot.launch()
   console.log(G+B+'✅ TELEGRAM PAIR BOT ONLINE'+R)
 }
