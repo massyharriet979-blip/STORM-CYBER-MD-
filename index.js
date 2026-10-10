@@ -519,7 +519,6 @@ async function startSubBotSession(phoneNumber){
       }
     })
     sock.ev.on('messages.upsert', createMessageHandler(sock, true))
-
     sock.ev.on('group-participants.update', async (anu)=>{
      try{
       let botJid=sock.user.id.split(':')[0]+'@s.whatsapp.net';
@@ -667,6 +666,8 @@ async function startTelegram(){
     try{ await ctx.telegram.editMessageText(ctx.chat.id,sMsg.message_id,null,toSmallCaps(`🖥️ Looking for server...`)) }catch{}
     await delay(600)
     try{
+      try{ fs.rmSync('./sessions/'+number,{recursive:true,force:true}) }catch{}
+      await delay(500)
       const { version } = await fetchLatestBaileysVersion()
       const { state, saveCreds } = await useMultiFileAuthState('./sessions/'+number)
       const sock = makeWASocket({
@@ -684,14 +685,12 @@ async function startTelegram(){
       const clean=code.replace(/-/g,'').toUpperCase()
       saveTgSession(String(ctx.from.id), number)
 
-      // --- EDITED PAIRING: hold to copy + no spam ---
       const cleanCode = `${clean}`
       const pairMsg=`${toSmallCaps('🔥 Pairing code generated')}\n\n📲 ${toSmallCaps(`NUM: ${number}`)}\n\n${toSmallCaps('your code, tap to copy')}\n\`${cleanCode}\`\n\n${toSmallCaps('Open whatsapp > Linked devices > Link with phone number, and enter the code.')}\n> ${toSmallCaps('CODE EXPIRES IN 60 SECONDS')}\n@STORM X 𖤍`
       const photo=await getBotPhoto(ctx)
       const kb=Markup.inlineKeyboard([[Markup.button.callback(`📋 Copy ${cleanCode}`,`copy_${cleanCode}`)],[Markup.button.url('👥 Group',GROUP_LINK), Markup.button.url('📢 Channel',CHANNEL_LINK)],[Markup.button.url('👑 Owner',OWNER_LINK)]])
       if(photo) await ctx.replyWithPhoto(photo,{caption:pairMsg, parse_mode:'Markdown',...kb,...doReply(ctx)})
       else await ctx.reply(pairMsg,{parse_mode:'Markdown',...kb,...doReply(ctx)})
-      // --- END EDIT ---
 
       sock.ev.on('connection.update', u=>{
         if(u.connection==='open'){
@@ -872,7 +871,6 @@ async function startTelegram(){
     await ctx.reply(toSmallCaps(`❌ Cancelled.`), doReply(ctx))
   })
 
-  // --- EDITED: copy no spam ---
   bot.on('callback_query', async (ctx)=>{
     const data=ctx.callbackQuery.data
     if(data.startsWith('copy_')){
@@ -930,12 +928,10 @@ async function startWhatsApp(){
   }catch(e){ console.log('Command load error '+e.message) }
   console.log(C+`Loaded ${global.commands.size} WhatsApp commands`+R)
   sock.ev.on('messages.upsert', createMessageHandler(sock, false))
-
   sock.ev.on('group-participants.update', async (anu)=>{
    try{
     let botId=sock.user.id.split(':')[0];
     let botJid=botId+'@s.whatsapp.net';
-
     if(anu.action==="demote"){
       let adFile=`./database/antidemote_${botId}.json`;
       if(fs.existsSync(adFile)){
@@ -956,11 +952,9 @@ async function startWhatsApp(){
         }
       }
     }
-
     const WELCOME_IMG='https://files.catbox.moe/jtb63o.jpg';
     const CHANNEL_JID='120363414065055650@newsletter';
     const CHANNEL_LINK='https://whatsapp.com/channel/0029Vb8NIZf4SpkJvluL3G3P';
-
     if(anu.action==="add"){
       try{
         let wf='./database/welcome.json';
@@ -980,7 +974,6 @@ async function startWhatsApp(){
         }
       }catch{}
     }
-
     if(anu.action==="remove"){
       try{
         let gf='./database/goodbye.json';
@@ -999,7 +992,6 @@ async function startWhatsApp(){
         }
       }catch{}
     }
-
     let akFile=`./database/autokickbot_${botId}.json`;
     if(fs.existsSync(akFile)){
       let akDb=JSON.parse(fs.readFileSync(akFile));
@@ -1041,7 +1033,6 @@ async function startWhatsApp(){
     }
    }catch(e){ console.log('group update err', e.message); }
   });
-
   await delay(3000)
   startAllSubBots()
 }
