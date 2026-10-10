@@ -1,8 +1,13 @@
 {
   "type": "module",
   "dependencies": {
+    "@distube/ytdl-core": "^4.16.12",
     "@whiskeysockets/baileys": "^7.0.0-rc14",
+    "axios": "^1.20.0",
+    "chess.js": "^1.4.0",
+    "jimp": "^1.6.1",
     "pino": "latest",
-    "telegraf": "^4.16.3"
+    "telegraf": "^4.16.3",
+    "yt-search": "^2.13.1"
   }
 }
