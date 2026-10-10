@@ -6,6 +6,7 @@
     "axios": "^1.20.0",
     "chess.js": "^1.4.0",
     "jimp": "^1.6.1",
+    "mongodb": "^7.7.0",
     "pino": "latest",
     "telegraf": "^4.16.3",
     "yt-search": "^2.13.1"
