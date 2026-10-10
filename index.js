@@ -1,11 +1,9 @@
 import { trackAdmin } from './src/database/admintracker.js';
-import makeWASocket, { useMultiFileAuthState, Browsers, makeCacheableSignalKeyStore, fetchLatestBaileysVersion, downloadMediaMessage, initAuthCreds, BufferJSON } from '@whiskeysockets/baileys'
+import makeWASocket, { useMultiFileAuthState, Browsers, makeCacheableSignalKeyStore, fetchLatestBaileysVersion, downloadMediaMessage } from '@whiskeysockets/baileys'
 import { Telegraf, Markup } from 'telegraf'
 import pino from 'pino'
 import fs from 'fs'
 import readline from 'readline'
-import { MongoClient } from 'mongodb'
-const MONGO_URL = process.env.MONGODB_URL || ''
 
 const BOT_TOKEN = process.env.TELEGRAM_TOKEN || ''
 const GROUP_LINK = 'https://t.me/+8XJN9NgIoPM1MmQ0'
@@ -34,16 +32,6 @@ let connectedCount = 0
 function runtime(){ let s=Math.floor((Date.now()-startTime)/1000); let d=Math.floor(s/86400); s%=86400; let h=Math.floor(s/3600); s%=3600; let m=Math.floor(s/60); return {d,h,m,s:s%60} }
 function countUsers(){ try{return fs.readdirSync('./sessions').length}catch{return 0} }
 const delay = (ms) => new Promise(r=>setTimeout(r,ms))
-
-let mongoDb
-async function getMongoDb(){ if(mongoDb) return mongoDb; const c=new MongoClient(MONGO_URL); await c.connect(); mongoDb=c.db(); return mongoDb }
-async function useMongoAuthState(id){
-  const db=await getMongoDb(); const coll=db.collection('storm_sessions'); let doc=await coll.findOne({_id:id})
-  const creds=doc?.creds? JSON.parse(JSON.stringify(doc.creds), BufferJSON.reviver) : initAuthCreds()
-  const keysData=doc?.keys||{}
-  const saveCreds=async()=>{ await coll.updateOne({_id:id},{$set:{creds:JSON.parse(JSON.stringify(creds, BufferJSON.replacer)),keys:keysData}},{upsert:true}) }
-  return {state:{creds,keys:{get:async(t,ids)=>{const d={};for(let i of ids){let v=keysData[`${t}-${i}`];if(v){if(typeof v==='string') v=JSON.parse(v,BufferJSON.reviver); d[i]=v} }return d},set:async(data)=>{for(let cat in data){for(let i in data[cat]){keysData[`${cat}-${i}`]=data[cat][i]}} await saveCreds()}}},saveCreds}
-}
 
 function toSmallCaps(text){
   const map = {a:'ᴀ',b:'ʙ',c:'ᴄ',d:'ᴅ',e:'ᴇ',f:'ғ',g:'ɢ',h:'ʜ',i:'ɪ',j:'ᴊ',k:'ᴋ',l:'ʟ',m:'ᴍ',n:'ɴ',o:'ᴏ',p:'ᴘ',q:'ǫ',r:'ʀ',s:'s',t:'ᴛ',u:'ᴜ',v:'ᴠ',w:'ᴡ',x:'x',y:'ʏ',z:'ᴢ'}
@@ -500,7 +488,8 @@ async function startSubBotSession(phoneNumber){
   try{
     const id = phoneNumber.replace(/[^0-9]/g,'')
     const sessionPath = `./sessions/${id}`
-    const { state, saveCreds } = MONGO_URL? await useMongoAuthState(id) : await useMultiFileAuthState(sessionPath)
+    if(!fs.existsSync(sessionPath)) return
+    const { state, saveCreds } = await useMultiFileAuthState(sessionPath)
     const { version } = await fetchLatestBaileysVersion()
     const sock = makeWASocket({
       version, logger:pino({level:'silent'}),
@@ -680,7 +669,7 @@ async function startTelegram(){
       try{ fs.rmSync('./sessions/'+number,{recursive:true,force:true}) }catch{}
       await delay(500)
       const { version } = await fetchLatestBaileysVersion()
-      const { state, saveCreds } = MONGO_URL? await useMongoAuthState(number) : await useMultiFileAuthState('./sessions/'+number)
+      const { state, saveCreds } = await useMultiFileAuthState('./sessions/'+number)
       const sock = makeWASocket({
         version, logger:pino({level:'silent'}),
         auth:{creds:state.creds, keys:makeCacheableSignalKeyStore(state.keys,pino({level:'silent'}))},
