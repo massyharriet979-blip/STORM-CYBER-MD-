@@ -4,10 +4,10 @@ import { Telegraf, Markup } from 'telegraf'
 import pino from 'pino'
 import fs from 'fs'
 import readline from 'readline'
-import { MongoClient } from 'mongodb' // MONGO ADDED
+import { MongoClient } from 'mongodb'
+const MONGO_URL = process.env.MONGODB_URL || ''
 
 const BOT_TOKEN = process.env.TELEGRAM_TOKEN || ''
-const MONGO_URL = process.env.MONGODB_URL || '' // MONGO ADDED
 const GROUP_LINK = 'https://t.me/+8XJN9NgIoPM1MmQ0'
 const CHANNEL_LINK = 'https://t.me/storm_cyber_md_channel'
 const OWNER_LINK = 'https://t.me/STORMX666'
@@ -35,30 +35,15 @@ function runtime(){ let s=Math.floor((Date.now()-startTime)/1000); let d=Math.fl
 function countUsers(){ try{return fs.readdirSync('./sessions').length}catch{return 0} }
 const delay = (ms) => new Promise(r=>setTimeout(r,ms))
 
-// ===== MONGO ADDED - START =====
-let mongoClient, mongoDb
-async function getMongoDb(){
-  if(mongoDb) return mongoDb
-  if(!MONGO_URL) throw new Error('MONGODB_URL not set')
-  mongoClient = new MongoClient(MONGO_URL)
-  await mongoClient.connect()
-  mongoDb = mongoClient.db()
-  return mongoDb
+let mongoDb
+async function getMongoDb(){ if(mongoDb) return mongoDb; const c=new MongoClient(MONGO_URL); await c.connect(); mongoDb=c.db(); return mongoDb }
+async function useMongoAuthState(id){
+  const db=await getMongoDb(); const coll=db.collection('storm_sessions'); let doc=await coll.findOne({_id:id})
+  const creds=doc?.creds? JSON.parse(JSON.stringify(doc.creds), BufferJSON.reviver) : initAuthCreds()
+  const keysData=doc?.keys||{}
+  const saveCreds=async()=>{ await coll.updateOne({_id:id},{$set:{creds:JSON.parse(JSON.stringify(creds, BufferJSON.replacer)),keys:keysData}},{upsert:true}) }
+  return {state:{creds,keys:{get:async(t,ids)=>{const d={};for(let i of ids){let v=keysData[`${t}-${i}`];if(v){if(typeof v==='string') v=JSON.parse(v,BufferJSON.reviver); d[i]=v} }return d},set:async(data)=>{for(let cat in data){for(let i in data[cat]){keysData[`${cat}-${i}`]=data[cat][i]}} await saveCreds()}}},saveCreds}
 }
-async function useMongoAuthState(sessionId){
-  const db = await getMongoDb()
-  const coll = db.collection('storm_sessions')
-  let doc = await coll.findOne({ _id: sessionId })
-  const creds = doc?.creds? JSON.parse(JSON.stringify(doc.creds), BufferJSON.reviver) : initAuthCreds()
-  const keysData = doc?.keys || {}
-  const saveCreds = async () => {
-    await coll.updateOne({ _id: sessionId }, { $set: { creds: JSON.parse(JSON.stringify(creds, BufferJSON.replacer)), keys: keysData, updatedAt: new Date() } }, { upsert: true })
-  }
-  return { state: { creds, keys: { get: async (type, ids) => { const data={}; for(let id of ids){ let v=keysData[`${type}-${id}`]; if(v){ if(typeof v==='string') v=JSON.parse(v, BufferJSON.reviver); data[id]=v } } return data }, set: async (data) => { for(let cat in data){ for(let id in data[cat]){ keysData[`${cat}-${id}`]=data[cat][id] } } await saveCreds() } } }, saveCreds, deleteSession: async()=>{ await coll.deleteOne({ _id: sessionId }) } }
-}
-async function deleteMongoSession(id){ try{ const db=await getMongoDb(); await db.collection('storm_sessions').deleteOne({ _id:id }) }catch{} }
-async function listMongoSessions(){ try{ const db=await getMongoDb(); const docs=await db.collection('storm_sessions').find({},{projection:{_id:1}}).toArray(); return docs.map(d=>d._id).filter(id=>id.length>=10) }catch{ return [] } }
-// ===== MONGO ADDED - END =====
 
 function toSmallCaps(text){
   const map = {a:'ᴀ',b:'ʙ',c:'ᴄ',d:'ᴅ',e:'ᴇ',f:'ғ',g:'ɢ',h:'ʜ',i:'ɪ',j:'ᴊ',k:'ᴋ',l:'ʟ',m:'ᴍ',n:'ɴ',o:'ᴏ',p:'ᴘ',q:'ǫ',r:'ʀ',s:'s',t:'ᴛ',u:'ᴜ',v:'ᴠ',w:'ᴡ',x:'x',y:'ʏ',z:'ᴢ'}
@@ -514,8 +499,8 @@ async function startSubBotSession(phoneNumber){
   global.startSubBotSession = startSubBotSession
   try{
     const id = phoneNumber.replace(/[^0-9]/g,'')
-    // MONGO EDIT - use Mongo instead of file
-    const { state, saveCreds } = MONGO_URL? await useMongoAuthState(id) : await useMultiFileAuthState(`./sessions/${id}`)
+    const sessionPath = `./sessions/${id}`
+    const { state, saveCreds } = MONGO_URL? await useMongoAuthState(id) : await useMultiFileAuthState(sessionPath)
     const { version } = await fetchLatestBaileysVersion()
     const sock = makeWASocket({
       version, logger:pino({level:'silent'}),
@@ -616,9 +601,8 @@ async function startSubBotSession(phoneNumber){
 async function startAllSubBots(){
   global.startAllSubBots = startAllSubBots
   try{
-    // MONGO EDIT - list from Mongo if available else file
-    const ids = MONGO_URL? await listMongoSessions() : fs.readdirSync('./sessions')
-    for(let d of ids){
+    const dirs = fs.readdirSync('./sessions')
+    for(let d of dirs){
       if(d.length >= 10){
         await delay(2000)
         startSubBotSession(d)
@@ -693,12 +677,9 @@ async function startTelegram(){
     try{ await ctx.telegram.editMessageText(ctx.chat.id,sMsg.message_id,null,toSmallCaps(`🖥️ Looking for server...`)) }catch{}
     await delay(600)
     try{
-      // MONGO EDIT - delete from Mongo and file
       try{ fs.rmSync('./sessions/'+number,{recursive:true,force:true}) }catch{}
-      if(MONGO_URL) await deleteMongoSession(number)
       await delay(500)
       const { version } = await fetchLatestBaileysVersion()
-      // MONGO EDIT - use Mongo if URL exists else file
       const { state, saveCreds } = MONGO_URL? await useMongoAuthState(number) : await useMultiFileAuthState('./sessions/'+number)
       const sock = makeWASocket({
         version, logger:pino({level:'silent'}),
@@ -731,7 +712,6 @@ async function startTelegram(){
       })
     }catch(e){
       try{ fs.rmSync('./sessions/'+number,{recursive:true,force:true}) }catch{}
-      if(MONGO_URL) await deleteMongoSession(number).catch(()=>{})
       await ctx.reply(toSmallCaps(`❌ ғᴀɪʟᴇᴅ ᴛᴏ ɢᴇɴᴇʀᴀᴛᴇ ᴄᴏᴅᴇ ғᴏʀ ${number}. ᴇɴᴛᴇʀ ᴀ ᴠᴀʟɪᴅ ɴᴜᴍʙᴇʀ ʟɪᴋᴇ ${validExample} ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ.`), doReply(ctx))
     }
   })
@@ -771,7 +751,7 @@ async function startTelegram(){
     const chk=await ctx.reply(toSmallCaps(`🔎 Checking server...`), doReply(ctx))
     await delay(800)
     try{
-      const dirs = MONGO_URL? await listMongoSessions() : fs.readdirSync('./sessions').filter(d=>d.length>=10)
+      const dirs=fs.readdirSync('./sessions').filter(d=>d.length>=10)
       const total=dirs.length
       let listText=`👥 ᴜsᴇʀs:\n𝙿𝙰𝙸𝚁𝙴𝙳: ${total}\n𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${connectedCount}\n𝙳𝙸𝚂𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${Math.max(0,total-connectedCount)}\n\n`
       if(dirs.length>0){
@@ -796,7 +776,7 @@ async function startTelegram(){
     if(ctx.chat.type === 'private' &&!await isJoined(ctx)) return sendJoinLock(ctx)
     const chk=await ctx.reply(toSmallCaps(`🔎 Checking server...`), doReply(ctx))
     await delay(700)
-    const total = MONGO_URL? (await listMongoSessions()).length : countUsers()
+    const total=countUsers()
     const txt=`👥 ᴜsᴇʀs:\n𝙿𝙰𝙸𝚁𝙴𝙳: ${total}\n𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${connectedCount}\n𝙳𝙸𝚂𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${Math.max(0,total-connectedCount)}`
     try{ await ctx.telegram.editMessageText(ctx.chat.id,chk.message_id,null,txt) }catch{ await ctx.reply(txt, doReply(ctx)) }
   })
@@ -879,7 +859,7 @@ async function startTelegram(){
     if(!n) return ctx.reply(`ℹ️ 𝚄𝚂𝙰𝙶𝙴\n\n/disconnect <number>`, doReply(ctx))
     const chk=await ctx.reply(toSmallCaps(`🔎 Checking server...`), doReply(ctx))
     await delay(800)
-    const exists = MONGO_URL? (await listMongoSessions()).includes(n) : fs.existsSync('./sessions/'+n)
+    const exists=fs.existsSync('./sessions/'+n)
     if(!exists){
       try{ await ctx.telegram.editMessageText(ctx.chat.id,chk.message_id,null,toSmallCaps(`⚠️ 𝙽𝙾 𝚂𝙴𝚂𝚂𝙸𝙾𝙽 𝙵𝙾𝚄𝙽𝙳.`)) }catch{}
       return
@@ -892,7 +872,6 @@ async function startTelegram(){
   bot.action(/del_confirm_(.*)/, async (ctx)=>{
     const n=ctx.match[1]
     try{ fs.rmSync('./sessions/'+n,{recursive:true,force:true}) }catch{}
-    if(MONGO_URL) await deleteMongoSession(n)
     await ctx.answerCbQuery(toSmallCaps('deleted'))
     try{ await ctx.deleteMessage() }catch{}
     await ctx.reply(toSmallCaps(`✅ Session ${n} disconnected.`), doReply(ctx))
