@@ -1048,7 +1048,6 @@ async function startWhatsApp(){
                 await sock.sendMessage(anu.id,{text:`╭───「 ᴀᴜᴛᴏ ᴋɪᴄᴋ 」───\n│ 🤖 @${jid.split('@')[0]} ᴀᴜᴛᴏ ᴋɪᴄᴋᴇᴅ\n╰────────────────`, mentions:[jid]}).catch(()=>{});
               }
             }
-          }catch{}
         }
       }
     if(anu.action==="promote"){
