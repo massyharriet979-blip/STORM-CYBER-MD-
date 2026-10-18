@@ -81,7 +81,6 @@ global.saveAutoMuteSchedule = (botId, groupId, action, ms)=>{
  saveSchedule(botId, db);
 };
 
-// FIX 4: BOTH group AND channel required
 async function isJoined(ctx){
   try{
     if(ctx.chat && ctx.chat.type!== 'private') return true;
@@ -110,7 +109,6 @@ function doReply(ctx){
   return {}
 }
 
-// FIX 1: BROKEN MENU - fixed backtick, version, userId
 async function sendMainMenu(ctx){
   const now=new Date()
   const dateStr=`${now.getDate()} ${now.getMonth()+1} ${now.getFullYear()}`
@@ -468,7 +466,6 @@ function createMessageHandler(sock, isSubBotSession = false){
         mObj.pushName=msg.pushName||""
         mObj.mentionedJid=msg.message.extendedTextMessage?.contextInfo?.mentionedJid||[]
         mObj.mtype=Object.keys(msg.message)[0]
-        // FIX 2: owner only if sender == bot number, even for subbot
         mObj.isSubBot = isSubBotSession
         mObj.isSubBotOwner = (senderNum === botIdNum)
         mObj.isOwner = (senderNum === botIdNum)
@@ -681,7 +678,6 @@ async function startTelegram(){
     try{ await ctx.telegram.editMessageText(ctx.chat.id,sMsg.message_id,null,toSmallCaps(`🖥️ looking for server...`)) }catch{}
     await delay(600)
     try{
-      // FIX 5 PAIR: NO delete before code - key safe
       await delay(500)
       const { version } = await fetchLatestBaileysVersion()
       const { state, saveCreds } = await useMultiFileAuthState('./sessions/'+number)
@@ -699,14 +695,12 @@ async function startTelegram(){
       const code=await sock.requestPairingCode(number)
       const clean=code.replace(/-/g,'').toUpperCase()
       saveTgSession(String(ctx.from.id), number)
-
       const cleanCode = `${clean}`
       const pairMsg=`${toSmallCaps('🔥 pairing code generated')}\n\n📲 ${toSmallCaps(`num: ${number}`)}\n\n${toSmallCaps('your code, tap to copy')}\n\`${cleanCode}\`\n\n${toSmallCaps('open whatsapp > linked devices > link with phone number, and enter the code.')}\n> ${toSmallCaps('code expires in 60 seconds')}\n@storm x 𖤍`
       const photo=await getBotPhoto(ctx)
       const kb=Markup.inlineKeyboard([[Markup.button.callback(`📋 Copy ${cleanCode}`,`copy_${cleanCode}`)],[Markup.button.url('👥 Group',GROUP_LINK), Markup.button.url('📢 Channel',CHANNEL_LINK)],[Markup.button.url('👑 Owner',OWNER_LINK)]])
       if(photo) await ctx.replyWithPhoto(photo,{caption:pairMsg, parse_mode:'Markdown',...kb,...doReply(ctx)})
       else await ctx.reply(pairMsg,{parse_mode:'Markdown',...kb,...doReply(ctx)})
-
       sock.ev.on('connection.update', u=>{
         if(u.connection==='open'){
           connectedCount++
@@ -715,7 +709,6 @@ async function startTelegram(){
         }
       })
     }catch(e){
-      // only delete on real failure
       try{ fs.rmSync('./sessions/'+number,{recursive:true,force:true}) }catch{}
       await ctx.reply(toSmallCaps(`❌ ғᴀɪʟᴇᴅ ᴛᴏ ɢᴇɴᴇʀᴀᴛᴇ ᴄᴏᴅᴇ ғᴏʀ ${number}. ᴇɴᴛᴇʀ ᴀ ᴠᴀʟɪᴅ ɴᴜᴍʙᴇʀ ʟɪᴋᴇ ${validExample} ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ.`), doReply(ctx))
     }
@@ -858,15 +851,12 @@ async function startTelegram(){
   bot.command('owner', devHandler)
   bot.command('creator', creatorHandler)
 
-  // FIX 8: DISCONNECT - show all paired numbers first, pick one, delete all button
   bot.command('disconnect', async (ctx)=>{
     if(ctx.chat.type === 'private' &&!await isJoined(ctx)) return sendJoinLock(ctx)
     let db=loadTgSessions()
     let myNums=db[String(ctx.from.id)]||[]
-    // also show sessions on disk for this user if not in tg db
     if(myNums.length===0){
       let dirs=fs.readdirSync('./sessions').filter(d=>d.length>=10)
-      // if only 1 global? show all for selection, user can pick
       if(dirs.length>0) myNums=dirs
     }
     if(myNums.length===0) return ctx.reply(toSmallCaps(`⚠️ no session found.`), doReply(ctx))
@@ -1061,7 +1051,6 @@ async function startWhatsApp(){
           }catch{}
         }
       }
-    }
     if(anu.action==="promote"){
       let apFile=`./database/antipromote_${botId}.json`;
       if(fs.existsSync(apFile)){
