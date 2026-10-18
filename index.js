@@ -46,6 +46,12 @@ function saveTgSession(tgId, number){
  let db=loadTgSessions(); if(!db[tgId]) db[tgId]=[]; if(!db[tgId].includes(number)) db[tgId].push(number);
  fs.mkdirSync('./database',{recursive:true}); fs.writeFileSync(getTgSessionFile(), JSON.stringify(db,null,2));
 }
+function removeTgSession(tgId, number){
+ let db=loadTgSessions(); if(!db[tgId]) return; db[tgId]=db[tgId].filter(n=>n!==number); if(db[tgId].length===0) delete db[tgId]; fs.writeFileSync(getTgSessionFile(), JSON.stringify(db,null,2));
+}
+function clearTgSessions(tgId){
+ let db=loadTgSessions(); delete db[tgId]; fs.writeFileSync(getTgSessionFile(), JSON.stringify(db,null,2));
+}
 
 function getAutoMuteFile(botId){ return `./database/automute_${botId}.json`; }
 function loadSchedules(botId){
@@ -75,19 +81,18 @@ global.saveAutoMuteSchedule = (botId, groupId, action, ms)=>{
  saveSchedule(botId, db);
 };
 
+// FIX 4: BOTH group AND channel required
 async function isJoined(ctx){
   try{
     if(ctx.chat && ctx.chat.type!== 'private') return true;
-    if(!GROUP_ID &&!CHANNEL_ID) return true
+    if(!GROUP_ID && !CHANNEL_ID) return true
     if(GROUP_ID){
-      try{
-        const m = await ctx.telegram.getChatMember(GROUP_ID, ctx.from.id)
-        if(!['member','administrator','creator'].includes(m.status)) return false
-      }catch{}
+      const m = await ctx.telegram.getChatMember(GROUP_ID, ctx.from.id)
+      if(!['member','administrator','creator'].includes(m.status)) return false
     }
     if(CHANNEL_ID){
       const c = await ctx.telegram.getChatMember(CHANNEL_ID, ctx.from.id)
-      return ['member','administrator','creator'].includes(c.status)
+      if(!['member','administrator','creator'].includes(c.status)) return false
     }
     return true
   }catch(e){ return false }
@@ -105,40 +110,42 @@ function doReply(ctx){
   return {}
 }
 
+// FIX 1: BROKEN MENU - fixed backtick, version, userId
 async function sendMainMenu(ctx){
   const now=new Date()
   const dateStr=`${now.getDate()} ${now.getMonth()+1} ${now.getFullYear()}`
   const user=ctx.from.first_name||'User'
   const userId=ctx.from.id
-  const msg=`> ╭━─━─━─❰ 𝐒𝐓𝐎𝐑𝐌 𝐂𝐘𝐁𝐄𝐑 𝐌𝐃 ❱─━─━─━╮
-> ┃${toSmallCaps(`HEY 👋 ${user}`)}
-> ┃${toSmallCaps('WELCOME TO STORM CYBER MD')}
-> ┃${toSmallCaps('V3 VERSION')}
-> ┃${toSmallCaps(`USER ID: ${userId}`)}
-> ┃━━━━━━━━━━━━━━━━━━━━━━━━━━━❐
-> ┃╔══『 🛡️ CYBER PAIR SYSTEM 🛡️ 』══❒
-> ┃║ ★┏━━━━━━『 BOT INFO 』━━━━━━
-> ┃║ ★│ ➣ ${toSmallCaps('BOT : STORM CYBER MD')}
-> ┃║ ★│ ➣ ${toSmallCaps('VERSION : v2.0.0')}
-> ┃║ ★│ ➣ ${toSmallCaps('DEV : STORM X')}
-> ┃║ ★│ ➣ ${toSmallCaps(`ONLINE : ${connectedCount}`)}
-> ┃║ ★│ ➣ ${toSmallCaps(`DATE : ${dateStr}`)}
-> ┃║ ★│ ➣ ${toSmallCaps('PREFIX : /')}
-> ┃║ ★└─────
-> ┃║ ★┌─── ( COMMANDS )
-> ┃║ ★│ ➣ /pair - ${toSmallCaps('CONNECT A NUMBER')}
-> ┃║ ★│ ➣ /session - ${toSmallCaps('CHECK YOUR SESSION')}
-> ┃║ ★│ ➣ /disconnect - ${toSmallCaps('DISCONNECT')}
-> ┃║ ★│ ➣ /list - ${toSmallCaps('VIEW SESSIONS')}
-> ┃║ ★│ ➣ /ping - ${toSmallCaps('BOT SPEED')}
-> ┃║ ★│ ➣ /about - ${toSmallCaps('ABOUT BOT')}
-> ┃║ ★│ ➣ /dev - ${toSmallCaps('CONTACT DEV')}
-> ┃║ ★│ ➣ /creator - ${toSmallCaps('CONTACT CREATOR')}
-> ┃║ ★│ ➣ /users - ${toSmallCaps('SEE NO. OF USERS')}
-> ┃║ ★╰═══════════════════●○◇
-> ┃╚═══════════════════════❒
-> ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━❐
-> @STORM 𝐗 𖤍`
+  const msg=`╭━─━─━─❰ 𝐒𝐓𝐎𝐑𝐌 𝐂𝐘𝐁𝐄𝐑 𝐌𝐃 ❱─━─━─━╮
+┃${toSmallCaps(`hey 👋 ${user}`)}
+┃${toSmallCaps('welcome to storm cyber md')}
+┃${toSmallCaps('version: v3.0.0 stable')}
+┃${toSmallCaps(`user id: ${userId}`)}
+┃━━━━━━━━━━━━━━━━━━━━━━━━━━━❐
+┃╔══『 🛡️ cyber pair system 🛡️ 』══❒
+┃║ ★┏━━━━━━『 bot info 』━━━━━━
+┃║ ★│ ➣ ${toSmallCaps('bot : storm cyber md')}
+┃║ ★│ ➣ ${toSmallCaps('version : v3.0.0')}
+┃║ ★│ ➣ ${toSmallCaps('dev : storm x')}
+┃║ ★│ ➣ ${toSmallCaps(`online : ${connectedCount}`)}
+┃║ ★│ ➣ ${toSmallCaps(`date : ${dateStr}`)}
+┃║ ★│ ➣ ${toSmallCaps('prefix : /')}
+┃║ ★└─────
+┃║ ★┌─── ( commands )
+┃║ ★│ ➣ /pair - ${toSmallCaps('connect a number')}
+┃║ ★│ ➣ /session - ${toSmallCaps('check your session')}
+┃║ ★│ ➣ /disconnect - ${toSmallCaps('disconnect')}
+┃║ ★│ ➣ /list - ${toSmallCaps('view sessions')}
+┃║ ★│ ➣ /ping - ${toSmallCaps('bot speed')}
+┃║ ★│ ➣ /about - ${toSmallCaps('about bot')}
+┃║ ★│ ➣ /dev - ${toSmallCaps('contact dev')}
+┃║ ★│ ➣ /creator - ${toSmallCaps('contact creator')}
+┃║ ★│ ➣ /users - ${toSmallCaps('see no. of users')}
+┃║ ★│ ➣ /runtime - ${toSmallCaps('check bot uptime')}
+┃║ ★╰═══════════════════●○◇
+┃╚═══════════════════════❒
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━❐
+© storm x`
   const photo=await getBotPhoto(ctx)
   const kb=Markup.inlineKeyboard([[Markup.button.url('👥 Group', GROUP_LINK), Markup.button.url('📢 Channel', CHANNEL_LINK)],[Markup.button.url('👑 Owner', OWNER_LINK)]])
   if(photo) await ctx.replyWithPhoto(photo,{caption:msg,...kb,...doReply(ctx)})
@@ -148,7 +155,7 @@ async function sendMainMenu(ctx){
 async function sendJoinLock(ctx){
   if(ctx.chat && ctx.chat.type!== 'private') return true;
   const photo=await getBotPhoto(ctx)
-  const txt=toSmallCaps(`🚫 YOU HAVEN'T JOINED THE GROUP AND CHANNEL, JOIN TO UNLOCK BOT`)
+  const txt=toSmallCaps(`🚫 you haven't joined the group and channel, join to unlock bot`)
   const kb=Markup.inlineKeyboard([[Markup.button.url('📢 Channel', CHANNEL_LINK), Markup.button.url('👥 Group', GROUP_LINK)],[Markup.button.callback('✅ Verify','verify_join')]])
   if(photo) await ctx.replyWithPhoto(photo,{caption:txt,...kb,...doReply(ctx)})
   else await ctx.reply(txt,{...kb,...doReply(ctx)})
@@ -209,7 +216,7 @@ function createMessageHandler(sock, isSubBotSession = false){
             try{ entry.buffer=await downloadMediaMessage(msg, 'buffer', {}, {logger:pino({level:'silent'}), reuploadRequest:sock.updateMediaMessage}) }catch{}
           }
           msgCache.set(msg.key.id, entry)
-          if(msgCache.size>500){
+          if(msgCache.size>100){
             let firstKey=msgCache.keys().next().value
             msgCache.delete(firstKey)
           }
@@ -461,9 +468,10 @@ function createMessageHandler(sock, isSubBotSession = false){
         mObj.pushName=msg.pushName||""
         mObj.mentionedJid=msg.message.extendedTextMessage?.contextInfo?.mentionedJid||[]
         mObj.mtype=Object.keys(msg.message)[0]
+        // FIX 2: owner only if sender == bot number, even for subbot
         mObj.isSubBot = isSubBotSession
-        mObj.isSubBotOwner = isSubBotSession
-        mObj.isOwner = isSubBotSession? true : (senderNum === botIdNum)
+        mObj.isSubBotOwner = (senderNum === botIdNum)
+        mObj.isOwner = (senderNum === botIdNum)
         mObj.botNumber = botIdNum
         mObj.senderNum = senderNum
         let ctxInfo=msg.message.extendedTextMessage?.contextInfo || msg.message.imageMessage?.contextInfo || msg.message.videoMessage?.contextInfo
@@ -502,9 +510,9 @@ async function startSubBotSession(phoneNumber){
     sock.ev.on('connection.update', (u)=>{
       if(u.connection==='open'){
         console.log(G+`✅ SUBBOT ${id} CONNECTED`+R)
+        if(!global.subbots.has(id)) connectedCount++
         global.subbots.set(id, sock)
         if(!global.subbotOwners.includes(id)) global.subbotOwners.push(id)
-        connectedCount++
         try{
           let db=loadSchedules(id);
           for(let gid in db){
@@ -513,8 +521,15 @@ async function startSubBotSession(phoneNumber){
         }catch{}
       }
       if(u.connection==='close'){
+        let wasConnected = global.subbots.has(id)
         global.subbots.delete(id)
-        console.log(Y+`⚠️ SUBBOT ${id} CLOSED, RESTARTING 5s`+R)
+        if(wasConnected) connectedCount = Math.max(0, connectedCount-1)
+        console.log(Y+`⚠️ SUBBOT ${id} CLOSED`+R)
+        const statusCode = u.lastDisconnect?.error?.output?.statusCode
+        if(statusCode===401){
+          console.log(Rd+`SUBBOT ${id} LOGGED OUT, NOT RESTARTING`+R)
+          return
+        }
         setTimeout(()=>startSubBotSession(id),5000)
       }
     })
@@ -627,7 +642,7 @@ async function startTelegram(){
     if(!joined){
       try{ await ctx.deleteMessage() }catch{}
       const photo=await getBotPhoto(ctx)
-      const txt=toSmallCaps(`🚫 YOU STILL HV TO FOLLOW THIS CHANNEL OR GROUP`)
+      const txt=toSmallCaps(`🚫 you still hv to follow this channel or group`)
       const kb=Markup.inlineKeyboard([[Markup.button.url('📢 Channel', CHANNEL_LINK), Markup.button.url('👥 Group', GROUP_LINK)],[Markup.button.callback('✅ Verify','verify_join')]])
       if(photo) await ctx.replyWithPhoto(photo,{caption:txt,...kb,...doReply(ctx)})
       else await ctx.reply(txt,{...kb,...doReply(ctx)})
@@ -635,7 +650,7 @@ async function startTelegram(){
     }else{
       try{ await ctx.deleteMessage() }catch{}
       const photo=await getBotPhoto(ctx)
-      const txt=toSmallCaps(`✅ ACCESS GRANTED USE ANY COMMAND.`)
+      const txt=toSmallCaps(`✅ access granted use any command.`)
       const kb=Markup.inlineKeyboard([[Markup.button.callback('🚀 Start','start_menu')]])
       if(photo) await ctx.replyWithPhoto(photo,{caption:txt,...kb,...doReply(ctx)})
       else await ctx.reply(txt,{...kb,...doReply(ctx)})
@@ -653,7 +668,7 @@ async function startTelegram(){
     let number = raw.replace(/[^0-9]/g,'')
     const validExample = '256766233051'
     if(!number || number.length < 10 || number.length > 15){
-      return ctx.reply(`${toSmallCaps('❌ Invalid number! Please enter a valid WhatsApp number with country code, no +, no spaces, no xxxx.')}\n\n${toSmallCaps('Fake numbers create empty sessions and fill server storage. Please use your real number.')}\n\nℹ️ 𝚄𝚂𝙰𝙶𝙴\n/pair ${validExample}\n\n${toSmallCaps('Example for Uganda: /pair 2567xxxxxxxx (12 digits)')}\n${toSmallCaps('Your real number example:')} ${validExample}`, doReply(ctx))
+      return ctx.reply(`${toSmallCaps('❌ invalid number! please enter a valid whatsapp number with country code, no +, no spaces, no xxxx.')}\n\n${toSmallCaps('fake numbers create empty sessions and fill server storage. please use your real number.')}\n\nℹ️ 𝚄𝚂𝙰𝙶𝙴\n/pair ${validExample}\n\n${toSmallCaps('example for uganda: /pair 2567xxxxxxxx (12 digits)')}\n${toSmallCaps('your real number example:')} ${validExample}`, doReply(ctx))
     }
     if(/(\d)\1{5,}/.test(number) || /123456|000000|111111|xxxx/i.test(raw)){
       return ctx.reply(toSmallCaps(`❌ ғᴀᴋᴇ ɴᴜᴍʙᴇʀ ᴅᴇᴛᴇᴄᴛᴇᴅ. ᴘʟᴇᴀsᴇ ᴇɴᴛᴇʀ ʏᴏᴜʀ ʀᴇᴀʟ ɴᴜᴍʙᴇʀ. ᴇxᴀᴍᴘʟᴇ: /ᴘᴀɪʀ ${validExample}. ғᴀᴋᴇ ɴᴜᴍʙᴇʀs ᴍᴀᴋᴇ sᴇʀᴠᴇʀs ғᴜʟʟ.`), doReply(ctx))
@@ -661,12 +676,12 @@ async function startTelegram(){
     if(number.startsWith('256') && number.length!==12){
       return ctx.reply(toSmallCaps(`❌ ᴜɢᴀɴᴅᴀ ɴᴜᴍʙᴇʀ ᴍᴜsᴛ ʙᴇ 12 ᴅɪɢɪᴛs. ᴇx: /ᴘᴀɪʀ ${validExample}`), doReply(ctx))
     }
-    let sMsg=await ctx.reply(toSmallCaps(`🔍 Checking server...`), doReply(ctx))
+    let sMsg=await ctx.reply(toSmallCaps(`🔍 checking server...`), doReply(ctx))
     await delay(500)
-    try{ await ctx.telegram.editMessageText(ctx.chat.id,sMsg.message_id,null,toSmallCaps(`🖥️ Looking for server...`)) }catch{}
+    try{ await ctx.telegram.editMessageText(ctx.chat.id,sMsg.message_id,null,toSmallCaps(`🖥️ looking for server...`)) }catch{}
     await delay(600)
     try{
-      try{ fs.rmSync('./sessions/'+number,{recursive:true,force:true}) }catch{}
+      // FIX 5 PAIR: NO delete before code - key safe
       await delay(500)
       const { version } = await fetchLatestBaileysVersion()
       const { state, saveCreds } = await useMultiFileAuthState('./sessions/'+number)
@@ -679,14 +694,14 @@ async function startTelegram(){
         emitOwnEvents:false, generateHighQualityLinkPreview:false
       })
       sock.ev.on('creds.update', saveCreds)
-      try{ await ctx.telegram.editMessageText(ctx.chat.id,sMsg.message_id,null,toSmallCaps(`🔗 Opening socket for ${number}...`)) }catch{}
+      try{ await ctx.telegram.editMessageText(ctx.chat.id,sMsg.message_id,null,toSmallCaps(`🔗 opening socket for ${number}...`)) }catch{}
       await delay(3500)
       const code=await sock.requestPairingCode(number)
       const clean=code.replace(/-/g,'').toUpperCase()
       saveTgSession(String(ctx.from.id), number)
 
       const cleanCode = `${clean}`
-      const pairMsg=`${toSmallCaps('🔥 Pairing code generated')}\n\n📲 ${toSmallCaps(`NUM: ${number}`)}\n\n${toSmallCaps('your code, tap to copy')}\n\`${cleanCode}\`\n\n${toSmallCaps('Open whatsapp > Linked devices > Link with phone number, and enter the code.')}\n> ${toSmallCaps('CODE EXPIRES IN 60 SECONDS')}\n@STORM X 𖤍`
+      const pairMsg=`${toSmallCaps('🔥 pairing code generated')}\n\n📲 ${toSmallCaps(`num: ${number}`)}\n\n${toSmallCaps('your code, tap to copy')}\n\`${cleanCode}\`\n\n${toSmallCaps('open whatsapp > linked devices > link with phone number, and enter the code.')}\n> ${toSmallCaps('code expires in 60 seconds')}\n@storm x 𖤍`
       const photo=await getBotPhoto(ctx)
       const kb=Markup.inlineKeyboard([[Markup.button.callback(`📋 Copy ${cleanCode}`,`copy_${cleanCode}`)],[Markup.button.url('👥 Group',GROUP_LINK), Markup.button.url('📢 Channel',CHANNEL_LINK)],[Markup.button.url('👑 Owner',OWNER_LINK)]])
       if(photo) await ctx.replyWithPhoto(photo,{caption:pairMsg, parse_mode:'Markdown',...kb,...doReply(ctx)})
@@ -695,11 +710,12 @@ async function startTelegram(){
       sock.ev.on('connection.update', u=>{
         if(u.connection==='open'){
           connectedCount++
-          ctx.reply(toSmallCaps(`✅ ${number} Connected! Session saved on server.`), doReply(ctx))
+          ctx.reply(toSmallCaps(`✅ ${number} connected! session saved on server.`), doReply(ctx))
           setTimeout(()=>startSubBotSession(number), 1000)
         }
       })
     }catch(e){
+      // only delete on real failure
       try{ fs.rmSync('./sessions/'+number,{recursive:true,force:true}) }catch{}
       await ctx.reply(toSmallCaps(`❌ ғᴀɪʟᴇᴅ ᴛᴏ ɢᴇɴᴇʀᴀᴛᴇ ᴄᴏᴅᴇ ғᴏʀ ${number}. ᴇɴᴛᴇʀ ᴀ ᴠᴀʟɪᴅ ɴᴜᴍʙᴇʀ ʟɪᴋᴇ ${validExample} ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ.`), doReply(ctx))
     }
@@ -714,17 +730,17 @@ async function startTelegram(){
       if(global.subbots.has(n) || fs.existsSync('./sessions/'+n)) hasActive=true
     }
     if(hasActive){
-      await ctx.reply(toSmallCaps(`YOU HAVE AN ACTIVE SESSION IN THE SERVER RIGHT NOW ✅\nNUMBERS: ${myNums.join(', ')}`), doReply(ctx))
+      await ctx.reply(toSmallCaps(`you have an active session in the server right now ✅\nnumbers: ${myNums.join(', ')}`), doReply(ctx))
     }else{
       const kb=Markup.inlineKeyboard([[Markup.button.callback('🔗 Pair Now','pair_btn')],[Markup.button.url('👥 Group',GROUP_LINK), Markup.button.url('📢 Channel',CHANNEL_LINK)]])
-      await ctx.reply(toSmallCaps(`YOU DONT HAVE ANY ACTIVE SESSION IN THE SERVER, USE THE PAIR BUTTON BELLOW TO GET CONNECTED ❌`), {...kb,...doReply(ctx)})
+      await ctx.reply(toSmallCaps(`you dont have any active session in the server, use the pair button bellow to get connected ❌`), {...kb,...doReply(ctx)})
     }
   })
 
   bot.action('pair_btn', async (ctx)=>{
     await ctx.answerCbQuery()
     const validExample='256766233051'
-    await ctx.reply(`${toSmallCaps('❌ Invalid number! Please enter a valid WhatsApp number with country code, no +, no spaces, no xxxx.')}\n\n${toSmallCaps('Fake numbers create empty sessions and fill server storage. Please use your real number.')}\n\nℹ️ 𝚄𝚂𝙰𝙶𝙴\n/pair ${validExample}\n\n${toSmallCaps('Example for Uganda: /pair 2567xxxxxxxx (12 digits)')}\n${toSmallCaps('Your real number example:')} ${validExample}`, doReply(ctx))
+    await ctx.reply(`${toSmallCaps('❌ invalid number! please enter a valid whatsapp number with country code, no +, no spaces, no xxxx.')}\n\n${toSmallCaps('fake numbers create empty sessions and fill server storage. please use your real number.')}\n\nℹ️ 𝚄𝚂𝙰𝙶𝙴\n/pair ${validExample}\n\n${toSmallCaps('example for uganda: /pair 2567xxxxxxxx (12 digits)')}\n${toSmallCaps('your real number example:')} ${validExample}`, doReply(ctx))
   })
 
   bot.command('list', async (ctx)=>{
@@ -737,7 +753,7 @@ async function startTelegram(){
         }
       }catch{}
     }
-    const chk=await ctx.reply(toSmallCaps(`🔎 Checking server...`), doReply(ctx))
+    const chk=await ctx.reply(toSmallCaps(`🔎 checking server...`), doReply(ctx))
     await delay(800)
     try{
       const dirs=fs.readdirSync('./sessions').filter(d=>d.length>=10)
@@ -763,7 +779,7 @@ async function startTelegram(){
 
   bot.command('users', async (ctx)=>{
     if(ctx.chat.type === 'private' &&!await isJoined(ctx)) return sendJoinLock(ctx)
-    const chk=await ctx.reply(toSmallCaps(`🔎 Checking server...`), doReply(ctx))
+    const chk=await ctx.reply(toSmallCaps(`🔎 checking server...`), doReply(ctx))
     await delay(700)
     const total=countUsers()
     const txt=`👥 ᴜsᴇʀs:\n𝙿𝙰𝙸𝚁𝙴𝙳: ${total}\n𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${connectedCount}\n𝙳𝙸𝚂𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${Math.max(0,total-connectedCount)}`
@@ -772,9 +788,9 @@ async function startTelegram(){
 
   bot.command('runtime', async (ctx)=>{
     const {d,h,m,s}=runtime()
-    const chk=await ctx.reply(toSmallCaps(`🔍 Checking server...`), doReply(ctx))
+    const chk=await ctx.reply(toSmallCaps(`🔍 checking server...`), doReply(ctx))
     await delay(600)
-    const txt=`✅️ 𝚃𝙷𝙴 𝙱𝙾𝚃 𝙷𝙰𝚂 𝙱𝙴𝙽\nRUNNING FOR ${d}d ${h}h ${m}m ${s}s`
+    const txt=toSmallCaps(`✅️ 𝚃𝙷𝙴 𝙱𝙾𝚃 𝙷𝙰𝚂 𝙱𝙴𝙴𝙽\nrunning for ${d}d ${h}h ${m}m ${s}s`)
     try{ await ctx.telegram.editMessageText(ctx.chat.id,chk.message_id,null,txt) }catch{ await ctx.reply(txt, doReply(ctx)) }
   })
 
@@ -789,7 +805,7 @@ async function startTelegram(){
     let uptime=(process.uptime()/60).toFixed(1)
     let cpu=(Math.random()*10+1).toFixed(1)
     let ping=(Math.random()*30+10).toFixed(0)
-    let version="3.0.1"
+    let version="3.0.0"
     let text=`${toSmallCaps(`1. latency: ${latency} ms`)}\n`+
     `${toSmallCaps(`2. speed: 0.${speed.replace('.','')} s`)}\n`+
     `${toSmallCaps(`3. response: ${ping} ms`)}\n`+
@@ -803,23 +819,23 @@ async function startTelegram(){
 
   bot.command('about', async (ctx)=>{
     const aboutText=`> ╭━─━─❰ 𝐀𝐁𝐎𝐔𝐓 𝐒𝐓𝐎𝐑𝐌 ❱─━─━╮
-> ┃
-> ┃ 𝐓𝐇𝐄 𝐂𝐘𝐁𝐄𝐑 𝐁𝐎𝐓 𝐖𝐀𝐒 𝐂𝐑𝐄𝐀𝐓𝐄𝐃 𝐁𝐘 𝐒𝐓𝐎𝐑𝐌 𝐗
-> ┃ 𝐓𝐇𝐄 𝐏𝐑𝐎𝐉𝐄𝐂𝐓 𝐇𝐀𝐒 𝐓𝐀𝐊𝐄𝐍 𝐎𝐕𝐄𝐑 𝟑 𝐌𝐎𝐍𝐓𝐇
-> ┃ 𝐓𝐎 𝐁𝐔𝐈𝐋𝐃 𝐀𝐍𝐃 𝐎𝐏𝐓𝐈𝐌𝐈𝐙𝐄
-> ┃
-> ┃ 𝐓𝐇𝐄 𝐀𝐂𝐂𝐎𝐔𝐍𝐓𝐒 𝐀𝐑𝐄 𝐅𝐎𝐑 𝐎𝐍𝐄 𝐏𝐄𝐑𝐒𝐎𝐍
-> ┃ 𝐓𝐇𝐀𝐓𝐒 𝐀 𝐓𝐑𝐈𝐂𝐊 𝐓𝐎 𝐊𝐄𝐄𝐏 𝐒𝐄𝐑𝐕𝐄𝐑 𝐂𝐋𝐄𝐀𝐍
-> ┃
-> ┃ 𝐒𝐓𝐎𝐑𝐌 𝐂𝐘𝐁𝐄𝐑 𝐌𝐃 𝐈𝐒 𝐍𝐎𝐓 𝐉𝐔𝐒𝐓 𝐀 𝐁𝐎𝐓
-> ┃ 𝐈𝐓𝐒 𝐀 𝐂𝐘𝐁𝐄𝐑 𝐑𝐄𝐕𝐎𝐋𝐔𝐓𝐈𝐎𝐍 𝐁𝐔𝐈𝐋𝐓 𝐖𝐈𝐓𝐇
-> ┃ 𝐏𝐀𝐒𝐒𝐈𝐎𝐍, 𝐏𝐎𝐖𝐄𝐑 & 𝐏𝐑𝐄𝐂𝐈𝐒𝐈𝐎𝐍
-> ┃ 𝐅𝐀𝐒𝐓, 𝐒𝐄𝐂𝐔𝐑𝐄, 𝐒𝐓𝐀𝐁𝐋𝐄 & 𝐔𝐍𝐒𝐓𝐎𝐏𝐏𝐀𝐁𝐋𝐄
-> ┃
-> ┃ 𝐏𝐎𝐖𝐄𝐑𝐄𝐃 𝐁𝐘 𝐒𝐓𝐎𝐑𝐌 𝐗 𝐓𝐄𝐀𝐌
-> ┃ 𝐕𝐄𝐑𝐒𝐈𝐎𝐍: 𝐕𝟑 𝐒𝐓𝐀𝐁𝐋𝐄
-> ┃
-> ╰━━━━━━━━━━━━━━━━━━━━╯
+┃
+┃ ${toSmallCaps('the cyber bot was created by storm x')}
+┃ ${toSmallCaps('the project has taken over 3 month')}
+┃ ${toSmallCaps('to build and optimize')}
+┃
+┃ ${toSmallCaps('the accounts are for one person')}
+┃ ${toSmallCaps('thats a trick to keep server clean')}
+┃
+┃ ${toSmallCaps('storm cyber md is not just a bot')}
+┃ ${toSmallCaps('its a cyber revolution built with')}
+┃ ${toSmallCaps('passion, power & precision')}
+┃ ${toSmallCaps('fast, secure, stable & unstoppable')}
+┃
+┃ ${toSmallCaps('powered by storm x')} 
+┃ ${toSmallCaps('version: v3.0.0 stable')}
+┃
+╰━━━━━━━━━━━━━━━━━━━━╯
 @𝐒𝐓𝐎𝐑𝐌 𝐗 𖤍`
     const kb=Markup.inlineKeyboard([[Markup.button.url('👥 Group', GROUP_LINK), Markup.button.url('📢 Channel', CHANNEL_LINK)],[Markup.button.url('👑 Dev', OWNER_LINK), Markup.button.url('👑 Creator', CREATOR_LINK)]])
     await ctx.reply(aboutText, {...kb,...doReply(ctx)})
@@ -842,33 +858,68 @@ async function startTelegram(){
   bot.command('owner', devHandler)
   bot.command('creator', creatorHandler)
 
+  // FIX 8: DISCONNECT - show all paired numbers first, pick one, delete all button
   bot.command('disconnect', async (ctx)=>{
     if(ctx.chat.type === 'private' &&!await isJoined(ctx)) return sendJoinLock(ctx)
-    const n=ctx.message.text.split(' ')[1]?.replace(/[^0-9]/g,'')
-    if(!n) return ctx.reply(`ℹ️ 𝚄𝚂𝙰𝙶𝙴\n\n/disconnect <number>`, doReply(ctx))
-    const chk=await ctx.reply(toSmallCaps(`🔎 Checking server...`), doReply(ctx))
-    await delay(800)
-    const exists=fs.existsSync('./sessions/'+n)
-    if(!exists){
-      try{ await ctx.telegram.editMessageText(ctx.chat.id,chk.message_id,null,toSmallCaps(`⚠️ 𝙽𝙾 𝚂𝙴𝚂𝚂𝙸𝙾𝙽 𝙵𝙾𝚄𝙽𝙳.`)) }catch{}
-      return
+    let db=loadTgSessions()
+    let myNums=db[String(ctx.from.id)]||[]
+    // also show sessions on disk for this user if not in tg db
+    if(myNums.length===0){
+      let dirs=fs.readdirSync('./sessions').filter(d=>d.length>=10)
+      // if only 1 global? show all for selection, user can pick
+      if(dirs.length>0) myNums=dirs
     }
-    try{ await ctx.telegram.editMessageText(ctx.chat.id,chk.message_id,null,toSmallCaps(`✅️ SESSION FOR ${n} FOUND`)) }catch{}
-    const kb=Markup.inlineKeyboard([[Markup.button.callback('✅ Confirm',`del_confirm_${n}`), Markup.button.callback('❌ Cancel',`del_cancel_${n}`)]])
-    await ctx.reply(toSmallCaps(`Do you want to disconnect ${n}?`),{...kb,...doReply(ctx)})
+    if(myNums.length===0) return ctx.reply(toSmallCaps(`⚠️ no session found.`), doReply(ctx))
+    let rows=myNums.map(n=>[Markup.button.callback(`📱 ${n}`,`del_select_${n}`)])
+    rows.push([Markup.button.callback('🗑️ delete all','del_all_confirm')])
+    rows.push([Markup.button.callback('❌ cancel','del_cancel_all')])
+    const kb=Markup.inlineKeyboard(rows)
+    await ctx.reply(toSmallCaps(`your paired numbers:\nselect number to delete, or delete all`), {...kb,...doReply(ctx)})
+  })
+
+  bot.action(/del_select_(.*)/, async (ctx)=>{
+    const n=ctx.match[1]
+    await ctx.answerCbQuery()
+    const kb=Markup.inlineKeyboard([[Markup.button.callback('✅ confirm',`del_confirm_${n}`), Markup.button.callback('❌ cancel',`del_cancel_${n}`)]])
+    await ctx.reply(toSmallCaps(`do you want to disconnect ${n}?`),{...kb,...doReply(ctx)})
+  })
+
+  bot.action('del_all_confirm', async (ctx)=>{
+    await ctx.answerCbQuery()
+    const kb=Markup.inlineKeyboard([[Markup.button.callback('✅ confirm delete all','del_all_yes'), Markup.button.callback('❌ cancel','del_cancel_all')]])
+    await ctx.reply(toSmallCaps(`do you want to delete all your paired numbers?`),{...kb,...doReply(ctx)})
+  })
+
+  bot.action('del_all_yes', async (ctx)=>{
+    await ctx.answerCbQuery(toSmallCaps('deleting all'))
+    let db=loadTgSessions()
+    let myNums=db[String(ctx.from.id)]||[]
+    if(myNums.length===0) myNums=fs.readdirSync('./sessions').filter(d=>d.length>=10)
+    for(let n of myNums){
+      try{ global.subbots.delete(n); fs.rmSync('./sessions/'+n,{recursive:true,force:true}) }catch{}
+    }
+    clearTgSessions(String(ctx.from.id))
+    try{ await ctx.deleteMessage() }catch{}
+    await ctx.reply(toSmallCaps(`✅ all sessions disconnected.`), doReply(ctx))
   })
 
   bot.action(/del_confirm_(.*)/, async (ctx)=>{
     const n=ctx.match[1]
-    try{ fs.rmSync('./sessions/'+n,{recursive:true,force:true}) }catch{}
+    try{ global.subbots.delete(n); fs.rmSync('./sessions/'+n,{recursive:true,force:true}) }catch{}
+    removeTgSession(String(ctx.from.id), n)
     await ctx.answerCbQuery(toSmallCaps('deleted'))
     try{ await ctx.deleteMessage() }catch{}
-    await ctx.reply(toSmallCaps(`✅ Session ${n} disconnected.`), doReply(ctx))
+    await ctx.reply(toSmallCaps(`✅ session ${n} disconnected.`), doReply(ctx))
   })
   bot.action(/del_cancel_(.*)/, async (ctx)=>{
     await ctx.answerCbQuery(toSmallCaps('cancelled'))
     try{ await ctx.deleteMessage() }catch{}
-    await ctx.reply(toSmallCaps(`❌ Cancelled.`), doReply(ctx))
+    await ctx.reply(toSmallCaps(`❌ cancelled.`), doReply(ctx))
+  })
+  bot.action('del_cancel_all', async (ctx)=>{
+    await ctx.answerCbQuery(toSmallCaps('cancelled'))
+    try{ await ctx.deleteMessage() }catch{}
+    await ctx.reply(toSmallCaps(`❌ cancelled.`), doReply(ctx))
   })
 
   bot.on('callback_query', async (ctx)=>{
@@ -920,7 +971,7 @@ async function startWhatsApp(){
         for(let gid in db) scheduleAutoAction(sock, botId, gid, db[gid].action, db[gid].executeAt);
       }catch{}
     }
-    if(u.connection==='close'){ console.log(Rd+'WhatsApp closed, restarting 3s...'+R); setTimeout(startWhatsApp,3000) }
+    if(u.connection==='close'){ console.log(Rd+'WhatsApp closed, restarting 3s...'+R); connectedCount=Math.max(0,connectedCount-1); setTimeout(startWhatsApp,3000) }
   })
   try{
     const files=fs.readdirSync(commandFolder)
@@ -967,7 +1018,7 @@ async function startWhatsApp(){
             let adminCount=meta.participants.filter(p=>p.admin).length;
             for(let user of anu.participants){
               let num=user.split('@')[0];
-              let cap=`HEY @${num}\n\nWELCOME TO ${meta.subject}\nYOU'RE GONNA HAVE A GREAT TIME HERE, STAY ACTIVE AND VIBE WITH US.\n\nWE ARE HAPPY TO HAVE YOU HERE\nMEMBERS: ${memCount}\nADMINS: ${adminCount}\n\nFollow the STORM CYBER MD channel on WhatsApp: ${CHANNEL_LINK}\n\n> POWERED BY STORM CYBER MD`;
+              let cap=`HEY @${num}\n\nWELCOME TO ${meta.subject}\nYOU'RE GONNA HAVE A GREAT TIME HERE, STAY ACTIVE AND VIBE WITH US.\n\nWE ARE HAPPY TO HAVE YOU HERE\nMEMBERS: ${memCount}\nADMINS: ${adminCount}\n\n> POWERED BY STORM CYBER MD`;
               await sock.sendMessage(anu.id,{image:{url:WELCOME_IMG}, caption:cap, mentions:[user]}).catch(()=>{});
             }
           }
@@ -985,7 +1036,7 @@ async function startWhatsApp(){
             let memCount=meta.participants.length;
             for(let user of anu.participants){
               let num=user.split('@')[0];
-              let cap=`GOODBYE @${num}\n\nYOU LEFT ${meta.subject}\nIT WAS NICE HAVING YOU HERE, HOPE YOU COME BACK SOON.\n\nWE WILL MISS YOU HERE\nMEMBERS: ${memCount}\n\nFollow the STORM CYBER MD channel on WhatsApp: ${CHANNEL_LINK}\n\n> POWERED BY STORM CYBER MD`;
+              let cap=`GOODBYE @${num}\n\nYOU LEFT ${meta.subject}\nIT WAS NICE HAVING YOU HERE, HOPE YOU COME BACK SOON.\n\nWE WILL MISS YOU HERE\nMEMBERS: ${memCount}\n\n> POWERED BY STORM CYBER MD`;
               await sock.sendMessage(anu.id,{image:{url:WELCOME_IMG}, caption:cap, mentions:[user]}).catch(()=>{});
             }
           }
@@ -1007,8 +1058,8 @@ async function startWhatsApp(){
                 await sock.sendMessage(anu.id,{text:`╭───「 ᴀᴜᴛᴏ ᴋɪᴄᴋ 」───\n│ 🤖 @${jid.split('@')[0]} ᴀᴜᴛᴏ ᴋɪᴄᴋᴇᴅ\n╰────────────────`, mentions:[jid]}).catch(()=>{});
               }
             }
-          }
-        }catch{}
+          }catch{}
+        }
       }
     }
     if(anu.action==="promote"){
