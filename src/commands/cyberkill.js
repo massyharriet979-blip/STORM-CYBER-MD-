@@ -27,7 +27,7 @@ execute: async(sock, m, args)=>{
   setTimeout(async()=>{
    await sock.sendMessage(m.chat,{text:`${toSmallCaps("injecting storm virus... [90%]")}`},{quoted:m})
   },4000)
-  setTimeout(async()=>{ 5000 )
+  setTimeout(async()=>{
    let txt = `${toSmallCaps("cyberkill executed")}
 ${toSmallCaps("target:")} @${name}
 ${toSmallCaps("status: terminated")}
@@ -37,4 +37,4 @@ ${toSmallCaps("by: storm cyber md")}
    await sock.sendMessage(m.chat,{text:txt, mentions:[target]},{quoted:m})
   },5500)
 }
-}
+};

@@ -28,6 +28,7 @@ execute: async(sock, m, args)=>{
   }
 
   let name = target.split('@')[0]
+  let clone = "simulated_" + name;
 
   await new Promise(r=>setTimeout(r,900))
   await sock.sendMessage(m.chat,{
@@ -41,10 +42,10 @@ execute: async(sock, m, args)=>{
 ╭══〘 🧬 𝐂𝐋𝐎𝐍𝐄 𝐈𝐃 𝐒𝐈𝐌 〙══⊷❍
 ┃ ${toSmallCaps(`target: @${name}`)}
 ┃ ${toSmallCaps(`jid: ${target}`)}
-┃ ${toSmallCaps(`clone: ${clone}`)} - unblocked [sim]`)}
+┃ ${toSmallCaps("clone: " + clone + " - unblocked [sim]")}
 ┃ ${toSmallCaps(`status: simulation complete`)}
 ┃
-┃ ${toSmallCaps(" real clone - ui only")}
+┃ ${toSmallCaps("no real clone - ui only")}
 ╰═══════════════════⊷❍
 > ${toSmallCaps("STORM CYBER MD")}
 `
@@ -52,4 +53,4 @@ execute: async(sock, m, args)=>{
   await sock.sendMessage(m.chat,{react:{text:"☠️",key:m.key}}).catch(()=>{})
  }catch(e){console.log(e)}
 }
-}
+};

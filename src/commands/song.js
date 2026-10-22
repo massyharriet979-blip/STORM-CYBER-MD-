@@ -1,53 +1,33 @@
-const yts = require('yt-search')
-const axios = require('axios')
+import yts from 'yt-search'
+import ytdl from '@distube/ytdl-core'
+import fs from 'fs'
 
-module.exports={
-name:"song",
-execute: async(sock,m,args)=>{
-let query=args.join(" ")
-if(!query) return m.reply("ᴜsᴀɢᴇ:.sᴏɴɢ ғᴀᴅᴇᴅ")
+export default {
+ name: 'song',
+ async execute(sock, from, msg, args) {
+  if(!args[0]) return sock.sendMessage(from,{text:'> ex:.song montagem bravo'}, {quoted:msg})
+  try{await sock.sendMessage(from,{react:{text:'🎧',key:msg.key}})}catch{}
 
-await sock.sendMessage(m.chat,{react:{text:"🎧",key:m.key}})
+  const v = (await yts(args.join(' '))).videos[0]
+  if(!v) return
 
-try{
-let search=await yts(query)
-let video=search.videos[0]
-if(!video) return m.reply("ɴᴏ ʀᴇsᴜʟᴛs")
+  const cap = `*╔═══「STORM CYBER MD 」═══❒*
+*║╭───────────────◆*
+*║│ ❍ 𝙰𝚄𝙳𝙸𝙾 𝙳𝙾𝚆𝙽𝙻𝙾𝙰𝙳𝙴𝚁*
+*║╰───────────────◆*
+*╚════════════════❒*
+*╔══════════════════❒*
+*┣◆ 𝚃𝙸𝚃𝙻𝙴:* ${v.title.toUpperCase()}
+*┣◆ 𝙳𝚄𝚁𝙰𝚃𝙸𝙾𝙽:* ${v.timestamp}
+*┣◆ 𝙰𝚄𝚃𝙷𝙾𝚁:* ${v.author.name.toUpperCase()}
+*╚══════════════════❒*
+*◇POWERED BY STORM X TEAM*`
 
-let cap=`╔══『 🛡️ ᴄʏʙᴇʀ ᴍᴅ ᴍᴜsɪᴄ🛡️』══❒*
-║ ★╭═══════════════●○◇
-║ ★┃ ᴛɪᴛʟᴇ : ${video.title}
-║ ★┃ ᴀʀᴛɪsᴛ : ${video.author.name}
-║ ★┃ ᴄʜᴀɴɴᴇʟ : ${video.author.name}
-║ ★┃ ᴅᴜʀᴀᴛɪᴏɴ : ${video.timestamp}
-║ ★┃ ʙᴏᴛ ɴᴀᴍᴇ : sᴛᴏʀᴍ ᴄʏʙᴇʀ ᴍᴅ
-║ ★┃ sɪᴢᴇ : 4.2 ᴍʙs
-║ ★┃ ᴛʏᴘᴇ : ᴅᴏᴄᴜᴍᴇɴᴛ
-║ ★╰══════════════════════●○◇
-╚═════════════════════════❒*
-> ᴘᴏᴡᴇʀᴇᴅ ʙʏ sᴛᴏʀᴍ x`
+  await sock.sendMessage(from, { image: { url: v.thumbnail }, caption: cap }, { quoted: msg })
 
-await sock.sendMessage(m.chat,{image:{url:video.thumbnail},caption:cap},{quoted:m})
-
-let dlUrl=null
-try{
-let r=await axios.get(`https://api.davidcyriltech.my.id/download/ytmp3?url=${video.url}`)
-dlUrl=r.data.result?.downloadUrl || r.data.download_url
-}catch{}
-if(!dlUrl){
-let r=await axios.get(`https://api.ryzendesu.vip/api/downloader/ytmp3?url=${video.url}`)
-dlUrl=r.data?.url
-}
-
-if(!dlUrl) return m.reply("ғᴀɪʟᴇᴅ")
-
-// SONG = DOCUMENT - DIFFERENT FROM PLAY
-await sock.sendMessage(m.chat,{
-document:{url:dlUrl},
-mimetype:"audio/mpeg",
-fileName: video.title+".mp3"
-},{quoted:m})
-
-}catch(e){ m.reply("ᴇʀʀᴏʀ: "+e.message) }
-}
+  const file = `/tmp/${Date.now()}.mp3`
+  await new Promise(r => ytdl(v.url,{filter:'audioonly'}).pipe(fs.createWriteStream(file)).on('finish',r))
+  await sock.sendMessage(from, { audio: fs.readFileSync(file), mimetype:'audio/mpeg' }, { quoted: msg })
+  fs.unlinkSync(file)
+ }
 }

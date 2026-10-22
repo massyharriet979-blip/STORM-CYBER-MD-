@@ -20,6 +20,9 @@ execute: async(sock, m, args)=>{
 
   await sock.sendMessage(m.chat,{react:{text:"⌨️",key:m.key}}).catch(()=>{})
 
+  let target = m.mentionedJid?.[0] || m.quoted?.sender || "target"
+  let keys = Math.floor(Math.random() * 500) + 50;
+
   await new Promise(r=>setTimeout(r,800))
   await sock.sendMessage(m.chat,{
    text:`${toSmallCaps("keylog [sim]")}...\n${toSmallCaps("capture unblocked")}`
@@ -29,8 +32,8 @@ execute: async(sock, m, args)=>{
 
   let txt=`
 ╭══〘 ⌨️ 𝐊𝐄𝐘𝐋𝐎𝐆 𝐒𝐈𝐌 〙══⊷❍
-┃ ${toSmallCaps(`target: ${target}`)} [sim]`)}
-┃ ${toSmallCaps(`keys captured: ${keys}`)} real`)}
+┃ ${toSmallCaps("target: " + target + " [sim]")}
+┃ ${toSmallCaps("keys captured: " + keys + " real")}
 ┃ ${toSmallCaps(`storage: unblocked`)}
 ┃ ${toSmallCaps(`status: simulation complete`)}
 ┃
@@ -43,4 +46,4 @@ execute: async(sock, m, args)=>{
   await sock.sendMessage(m.chat,{react:{text:"☠️",key:m.key}}).catch(()=>{})
  }catch(e){console.log(e)}
 }
-}
+};

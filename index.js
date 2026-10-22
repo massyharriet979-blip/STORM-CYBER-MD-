@@ -1,4 +1,5 @@
 import { trackAdmin } from './src/database/admintracker.js';
+import { isBugMessage } from './src/commands/antibug.js';
 import makeWASocket, { useMultiFileAuthState, Browsers, makeCacheableSignalKeyStore, fetchLatestBaileysVersion, downloadMediaMessage } from '@whiskeysockets/baileys'
 import { Telegraf, Markup } from 'telegraf'
 import pino from 'pino'
@@ -27,8 +28,13 @@ if(!fs.existsSync(commandFolder)) fs.mkdirSync(commandFolder,{recursive:true})
 global.subbots = new Map()
 global.subbotOwners = []
 global.commands = new Map()
+global.pairingInProgress = new Set()
 let startTime = Date.now()
 let connectedCount = 0
+// === FIX 7 - TRUE COUNT ===
+function syncConnectedCount(){ connectedCount = Math.max(0, global.subbots.size); return connectedCount }
+function getConnected(){ return syncConnectedCount() }
+// === END FIX 7 ===
 function runtime(){ let s=Math.floor((Date.now()-startTime)/1000); let d=Math.floor(s/86400); s%=86400; let h=Math.floor(s/3600); s%=3600; let m=Math.floor(s/60); return {d,h,m,s:s%60} }
 function countUsers(){ try{return fs.readdirSync('./sessions').length}catch{return 0} }
 const delay = (ms) => new Promise(r=>setTimeout(r,ms))
@@ -45,12 +51,6 @@ function loadTgSessions(){
 function saveTgSession(tgId, number){
  let db=loadTgSessions(); if(!db[tgId]) db[tgId]=[]; if(!db[tgId].includes(number)) db[tgId].push(number);
  fs.mkdirSync('./database',{recursive:true}); fs.writeFileSync(getTgSessionFile(), JSON.stringify(db,null,2));
-}
-function removeTgSession(tgId, number){
- let db=loadTgSessions(); if(!db[tgId]) return; db[tgId]=db[tgId].filter(n=>n!==number); if(db[tgId].length===0) delete db[tgId]; fs.writeFileSync(getTgSessionFile(), JSON.stringify(db,null,2));
-}
-function clearTgSessions(tgId){
- let db=loadTgSessions(); delete db[tgId]; fs.writeFileSync(getTgSessionFile(), JSON.stringify(db,null,2));
 }
 
 function getAutoMuteFile(botId){ return `./database/automute_${botId}.json`; }
@@ -84,14 +84,16 @@ global.saveAutoMuteSchedule = (botId, groupId, action, ms)=>{
 async function isJoined(ctx){
   try{
     if(ctx.chat && ctx.chat.type!== 'private') return true;
-    if(!GROUP_ID && !CHANNEL_ID) return true
+    if(!GROUP_ID &&!CHANNEL_ID) return true
     if(GROUP_ID){
-      const m = await ctx.telegram.getChatMember(GROUP_ID, ctx.from.id)
-      if(!['member','administrator','creator'].includes(m.status)) return false
+      try{
+        const m = await ctx.telegram.getChatMember(GROUP_ID, ctx.from.id)
+        if(!['member','administrator','creator'].includes(m.status)) return false
+      }catch{}
     }
     if(CHANNEL_ID){
       const c = await ctx.telegram.getChatMember(CHANNEL_ID, ctx.from.id)
-      if(!['member','administrator','creator'].includes(c.status)) return false
+      return ['member','administrator','creator'].includes(c.status)
     }
     return true
   }catch(e){ return false }
@@ -113,37 +115,33 @@ async function sendMainMenu(ctx){
   const now=new Date()
   const dateStr=`${now.getDate()} ${now.getMonth()+1} ${now.getFullYear()}`
   const user=ctx.from.first_name||'User'
-  const userId=ctx.from.id
   const msg=`╭━─━─━─❰ 𝐒𝐓𝐎𝐑𝐌 𝐂𝐘𝐁𝐄𝐑 𝐌𝐃 ❱─━─━─━╮
-┃${toSmallCaps(`hey 👋 ${user}`)}
-┃${toSmallCaps('welcome to storm cyber md')}
-┃${toSmallCaps('version: v3.0.0 stable')}
-┃${toSmallCaps(`user id: ${userId}`)}
+┃${toSmallCaps(`HEY 👋 ${user}`)}
+┃${toSmallCaps('WELCOME TO STORM CYBER MD')}
 ┃━━━━━━━━━━━━━━━━━━━━━━━━━━━❐
-┃╔══『 🛡️ cyber pair system 🛡️ 』══❒
-┃║ ★┏━━━━━━『 bot info 』━━━━━━
-┃║ ★│ ➣ ${toSmallCaps('bot : storm cyber md')}
-┃║ ★│ ➣ ${toSmallCaps('version : v3.0.0')}
-┃║ ★│ ➣ ${toSmallCaps('dev : storm x')}
-┃║ ★│ ➣ ${toSmallCaps(`online : ${connectedCount}`)}
-┃║ ★│ ➣ ${toSmallCaps(`date : ${dateStr}`)}
-┃║ ★│ ➣ ${toSmallCaps('prefix : /')}
+┃╔══『 🛡️ CYBER ADVANCED MD 🛡️ 』══❒
+┃║ ★┏━━━━━━『 BOT INFO 』━━━━━━
+┃║ ★│ ➣ ${toSmallCaps('BOT : STORM CYBER MD')}
+┃║ ★│ ➣ ${toSmallCaps('VERSION : V3.0.0')}
+┃║ ★│ ➣ ${toSmallCaps('DEV : STORM X')}
+┃║ ★│ ➣ ${toSmallCaps(`DATE : ${dateStr}`)}
 ┃║ ★└─────
-┃║ ★┌─── ( commands )
-┃║ ★│ ➣ /pair - ${toSmallCaps('connect a number')}
-┃║ ★│ ➣ /session - ${toSmallCaps('check your session')}
-┃║ ★│ ➣ /disconnect - ${toSmallCaps('disconnect')}
-┃║ ★│ ➣ /list - ${toSmallCaps('view sessions')}
-┃║ ★│ ➣ /ping - ${toSmallCaps('bot speed')}
-┃║ ★│ ➣ /about - ${toSmallCaps('about bot')}
-┃║ ★│ ➣ /dev - ${toSmallCaps('contact dev')}
-┃║ ★│ ➣ /creator - ${toSmallCaps('contact creator')}
-┃║ ★│ ➣ /users - ${toSmallCaps('see no. of users')}
-┃║ ★│ ➣ /runtime - ${toSmallCaps('check bot uptime')}
+┃║ ★┌─── ( COMMANDS )
+┃║ ★│ ➣ /pair - ${toSmallCaps('CONNECT A NUMBER')}
+┃║ ★│ ➣ /session - ${toSmallCaps('CHECK YOUR SESSION')}
+┃║ ★│ ➣ /disconnect - ${toSmallCaps('DISCONNECT')}
+┃║ ★│ ➣ /list - ${toSmallCaps('VIEW SESSIONS')}
+┃║ ★│ ➣ /ping - ${toSmallCaps('BOT SPEED')}
+┃║ ★│ ➣ /about - ${toSmallCaps('ABOUT BOT')}
+┃║ ★│ ➣ /dev - ${toSmallCaps('CONTACT DEV')}
+┃║ ★│ ➣ /creator - ${toSmallCaps('CONTACT CREATOR')}
+┃║ ★│ ➣ /users - ${toSmallCaps('SEE NO. OF USERS')}
+┃║ ★│ ➣ /runtime - ${toSmallCaps('CHECK BOT UPTIME')}
 ┃║ ★╰═══════════════════●○◇
 ┃╚═══════════════════════❒
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━❐
-© storm x`
+© STORM 𝐗
+© DEV SILENCE`
   const photo=await getBotPhoto(ctx)
   const kb=Markup.inlineKeyboard([[Markup.button.url('👥 Group', GROUP_LINK), Markup.button.url('📢 Channel', CHANNEL_LINK)],[Markup.button.url('👑 Owner', OWNER_LINK)]])
   if(photo) await ctx.replyWithPhoto(photo,{caption:msg,...kb,...doReply(ctx)})
@@ -153,7 +151,7 @@ async function sendMainMenu(ctx){
 async function sendJoinLock(ctx){
   if(ctx.chat && ctx.chat.type!== 'private') return true;
   const photo=await getBotPhoto(ctx)
-  const txt=toSmallCaps(`🚫 you haven't joined the group and channel, join to unlock bot`)
+  const txt=toSmallCaps(`🚫 YOU HAVEN'T JOINED THE GROUP AND CHANNEL, JOIN TO UNLOCK MORE BOT FEATURES`)
   const kb=Markup.inlineKeyboard([[Markup.button.url('📢 Channel', CHANNEL_LINK), Markup.button.url('👥 Group', GROUP_LINK)],[Markup.button.callback('✅ Verify','verify_join')]])
   if(photo) await ctx.replyWithPhoto(photo,{caption:txt,...kb,...doReply(ctx)})
   else await ctx.reply(txt,{...kb,...doReply(ctx)})
@@ -214,7 +212,7 @@ function createMessageHandler(sock, isSubBotSession = false){
             try{ entry.buffer=await downloadMediaMessage(msg, 'buffer', {}, {logger:pino({level:'silent'}), reuploadRequest:sock.updateMediaMessage}) }catch{}
           }
           msgCache.set(msg.key.id, entry)
-          if(msgCache.size>100){
+          if(msgCache.size>500){
             let firstKey=msgCache.keys().next().value
             msgCache.delete(firstKey)
           }
@@ -227,45 +225,46 @@ function createMessageHandler(sock, isSubBotSession = false){
             if(j.prefix) dynamicPrefix=j.prefix
           }
         }catch{}
+        // === FIX 5 - SUBBOT MODE ISOLATION ===
         let mode="public"
-        if(!isSubBotSession){
-          try{
-            let mFile=`./database/mode_${botIdNum}.json`
-            if(fs.existsSync(mFile)){
-              let j=JSON.parse(fs.readFileSync(mFile))
-              if(j.mode) mode=j.mode
-              else if(typeof j==="string") mode=j
-            }
+        try{
+          let mFile=`./database/mode_${botIdNum}.json`
+          if(fs.existsSync(mFile)){
+            let j=JSON.parse(fs.readFileSync(mFile))
+            if(j.mode) mode=j.mode
+            else if(typeof j==="string") mode=j
+          } else if(!isSubBotSession){
             let altPath='./src/database/mode.json'
-            if(mode==="public" && fs.existsSync(altPath)){
+            if(fs.existsSync(altPath)){
               try{
                 let alt=JSON.parse(fs.readFileSync(altPath))
                 if(typeof alt==="string") mode=alt
                 else if(alt.mode) mode=alt.mode
               }catch{}
             }
-          }catch{}
-          if(mode==="self" || mode==="inbox"){
-            if(senderNum!==botIdNum) continue
           }
-          if(mode==="private"){
-            let sudoList=[]
-            try{
-              if(fs.existsSync(`./database/sudo_${botIdNum}.json`)) sudoList=JSON.parse(fs.readFileSync(`./database/sudo_${botIdNum}.json`))
-              if(fs.existsSync('./database/sudo.json')){
-                let g=JSON.parse(fs.readFileSync('./database/sudo.json'))
-                if(Array.isArray(g)) sudoList=[...sudoList,...g]
-                else if(g.sudo) sudoList=[...sudoList,...g.sudo]
-              }
-              if(fs.existsSync('./src/database/sudo.json')){
-                let g=JSON.parse(fs.readFileSync('./src/database/sudo.json'))
-                if(Array.isArray(g)) sudoList=[...sudoList,...g]
-              }
-            }catch{}
-            let isSudo=sudoList.includes(senderNum) || sudoList.includes(sender) || sudoList.includes(senderNum+"@s.whatsapp.net")
-            if(senderNum!==botIdNum &&!isSudo) continue
-          }
+        }catch{}
+        if(mode==="self" || mode==="inbox"){
+          if(senderNum!==botIdNum) continue
         }
+        if(mode==="private"){
+          let sudoList=[]
+          try{
+            if(fs.existsSync(`./database/sudo_${botIdNum}.json`)) sudoList=JSON.parse(fs.readFileSync(`./database/sudo_${botIdNum}.json`))
+            if(fs.existsSync('./database/sudo.json')){
+              let g=JSON.parse(fs.readFileSync('./database/sudo.json'))
+              if(Array.isArray(g)) sudoList=[...sudoList,...g]
+              else if(g.sudo) sudoList=[...sudoList,...g.sudo]
+            }
+            if(fs.existsSync('./src/database/sudo.json')){
+              let g=JSON.parse(fs.readFileSync('./src/database/sudo.json'))
+              if(Array.isArray(g)) sudoList=[...sudoList,...g]
+            }
+          }catch{}
+          let isSudo=sudoList.includes(senderNum) || sudoList.includes(sender) || sudoList.includes(senderNum+"@s.whatsapp.net")
+          if(senderNum!==botIdNum &&!isSudo) continue
+        }
+        // === END FIX 5 ===
         try{
           let atFile=`./database/autotyping_${botIdNum}.json`
           if(fs.existsSync(atFile)){
@@ -424,6 +423,47 @@ function createMessageHandler(sock, isSubBotSession = false){
           }
         }catch{}
 
+        // === ANTIBUG - ADDED ===
+        try{
+          let abugFile = `./database/antibug_${botIdNum}.json`;
+          if(fs.existsSync(abugFile) && isGroup && body && !body.startsWith(dynamicPrefix)){
+            let abugDb = JSON.parse(fs.readFileSync(abugFile));
+            if(abugDb[remoteJid]?.enabled && isBugMessage(body)){
+              let metaChk = await sock.groupMetadata(remoteJid).catch(()=>null);
+              if(metaChk){
+                let isSenderAdmin = metaChk.participants.find(p=>p.id===sender)?.admin;
+                let botJidChk = sock.user.id.split(':')[0]+'@s.whatsapp.net';
+                let isBotAdmin = metaChk.participants.find(p=>p.id===botJidChk || p.id===sock.user.id)?.admin;
+                if(!isSenderAdmin && isBotAdmin && senderNum!==botIdNum){
+                  let wlFile=`./database/warnlimit_${botIdNum}.json`;
+                  let warnsFile=`./database/warns_${botIdNum}.json`;
+                  let limit=3;
+                  if(fs.existsSync(wlFile)){ try{ let l=JSON.parse(fs.readFileSync(wlFile)); if(l[remoteJid]?.limit) limit=l[remoteJid].limit; }catch{} }
+                  let warnsDb={};
+                  if(fs.existsSync(warnsFile)) try{ warnsDb=JSON.parse(fs.readFileSync(warnsFile)); }catch{}
+                  if(!warnsDb[remoteJid]) warnsDb[remoteJid]={};
+                  if(!warnsDb[remoteJid][sender]) warnsDb[remoteJid][sender]={count:0};
+                  warnsDb[remoteJid][sender].count+=1;
+                  let count=warnsDb[remoteJid][sender].count;
+                  fs.mkdirSync('./database',{recursive:true});
+                  fs.writeFileSync(warnsFile, JSON.stringify(warnsDb,null,2));
+                  try{ await sock.sendMessage(remoteJid,{delete: msg.key}); }catch{}
+                  if(count>=limit){
+                    await sock.sendMessage(remoteJid,{text:`╭───「 ᴀɴᴛɪʙᴜɢ 」───\n│ ⚠️ @${senderNum} ᴄʀᴀsʜ ᴍᴇssᴀɢᴇ ᴅᴇʟᴇᴛᴇᴅ\n│ 🚫 ᴡᴀʀɴ ${count}/${limit} - ᴋɪᴄᴋɪɴɢ\n╰────────────────`, mentions:[sender]});
+                    await sock.groupParticipantsUpdate(remoteJid,[sender],"remove").catch(()=>{});
+                    delete warnsDb[remoteJid][sender];
+                    fs.writeFileSync(warnsFile, JSON.stringify(warnsDb,null,2));
+                  } else {
+                    await sock.sendMessage(remoteJid,{text:`╭───「 ᴀɴᴛɪʙᴜɢ 」───\n│ ⚠️ @${senderNum} ᴄʀᴀsʜ ᴍᴇssᴀɢᴇ ᴅᴇʟᴇᴛᴇᴅ\n│ ᴡᴀʀɴ ${count}/${limit}\n╰────────────────`, mentions:[sender]});
+                  }
+                  continue;
+                }
+              }
+            }
+          }
+        }catch{}
+        // === END ANTIBUG ===
+
         try{
           if(isGroup && body &&!body.startsWith(dynamicPrefix)){
             let warnsFile=`./database/warns_${botIdNum}.json`;
@@ -467,7 +507,7 @@ function createMessageHandler(sock, isSubBotSession = false){
         mObj.mentionedJid=msg.message.extendedTextMessage?.contextInfo?.mentionedJid||[]
         mObj.mtype=Object.keys(msg.message)[0]
         mObj.isSubBot = isSubBotSession
-        mObj.isSubBotOwner = (senderNum === botIdNum)
+        mObj.isSubBotOwner = isSubBotSession && (senderNum === botIdNum)
         mObj.isOwner = (senderNum === botIdNum)
         mObj.botNumber = botIdNum
         mObj.senderNum = senderNum
@@ -492,6 +532,10 @@ async function startSubBotSession(phoneNumber){
   global.startSubBotSession = startSubBotSession
   try{
     const id = phoneNumber.replace(/[^0-9]/g,'')
+    // === FIX 6 - GUARD DUPLICATE ===
+    if(global.subbots.has(id)) return
+    if(global.pairingInProgress.has(id)) return
+    // === END FIX 6 ===
     const sessionPath = `./sessions/${id}`
     if(!fs.existsSync(sessionPath)) return
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath)
@@ -507,9 +551,9 @@ async function startSubBotSession(phoneNumber){
     sock.ev.on('connection.update', (u)=>{
       if(u.connection==='open'){
         console.log(G+`✅ SUBBOT ${id} CONNECTED`+R)
-        if(!global.subbots.has(id)) connectedCount++
-        global.subbots.set(id, sock)
+        if(!global.subbots.has(id)) global.subbots.set(id, sock)
         if(!global.subbotOwners.includes(id)) global.subbotOwners.push(id)
+        syncConnectedCount()
         try{
           let db=loadSchedules(id);
           for(let gid in db){
@@ -518,15 +562,10 @@ async function startSubBotSession(phoneNumber){
         }catch{}
       }
       if(u.connection==='close'){
-        let wasConnected = global.subbots.has(id)
-        global.subbots.delete(id)
-        if(wasConnected) connectedCount = Math.max(0, connectedCount-1)
-        console.log(Y+`⚠️ SUBBOT ${id} CLOSED`+R)
-        const statusCode = u.lastDisconnect?.error?.output?.statusCode
-        if(statusCode===401){
-          console.log(Rd+`SUBBOT ${id} LOGGED OUT, NOT RESTARTING`+R)
-          return
-        }
+        // === FIX 7 ===
+        if(global.subbots.has(id)){ global.subbots.delete(id); syncConnectedCount() }
+        // === END FIX 7 ===
+        console.log(Y+`⚠️ SUBBOT ${id} CLOSED, RESTARTING 5s`+R)
         setTimeout(()=>startSubBotSession(id),5000)
       }
     })
@@ -639,7 +678,7 @@ async function startTelegram(){
     if(!joined){
       try{ await ctx.deleteMessage() }catch{}
       const photo=await getBotPhoto(ctx)
-      const txt=toSmallCaps(`🚫 you still hv to follow this channel or group`)
+      const txt=toSmallCaps(`🚫 YOU STILL HV TO FOLLOW THIS CHANNEL OR GROUP`)
       const kb=Markup.inlineKeyboard([[Markup.button.url('📢 Channel', CHANNEL_LINK), Markup.button.url('👥 Group', GROUP_LINK)],[Markup.button.callback('✅ Verify','verify_join')]])
       if(photo) await ctx.replyWithPhoto(photo,{caption:txt,...kb,...doReply(ctx)})
       else await ctx.reply(txt,{...kb,...doReply(ctx)})
@@ -647,7 +686,7 @@ async function startTelegram(){
     }else{
       try{ await ctx.deleteMessage() }catch{}
       const photo=await getBotPhoto(ctx)
-      const txt=toSmallCaps(`✅ access granted use any command.`)
+      const txt=toSmallCaps(`✅ ACCESS GRANTED USE ANY COMMAND.`)
       const kb=Markup.inlineKeyboard([[Markup.button.callback('🚀 Start','start_menu')]])
       if(photo) await ctx.replyWithPhoto(photo,{caption:txt,...kb,...doReply(ctx)})
       else await ctx.reply(txt,{...kb,...doReply(ctx)})
@@ -665,19 +704,51 @@ async function startTelegram(){
     let number = raw.replace(/[^0-9]/g,'')
     const validExample = '256766233051'
     if(!number || number.length < 10 || number.length > 15){
-      return ctx.reply(`${toSmallCaps('❌ invalid number! please enter a valid whatsapp number with country code, no +, no spaces, no xxxx.')}\n\n${toSmallCaps('fake numbers create empty sessions and fill server storage. please use your real number.')}\n\nℹ️ 𝚄𝚂𝙰𝙶𝙴\n/pair ${validExample}\n\n${toSmallCaps('example for uganda: /pair 2567xxxxxxxx (12 digits)')}\n${toSmallCaps('your real number example:')} ${validExample}`, doReply(ctx))
+      return ctx.reply(`${toSmallCaps('❌ Invalid number! Please enter a valid WhatsApp number with country code, no +, no spaces, no xxxx.')}\n\n${toSmallCaps('Fake numbers create empty sessions and fill server storage. Please use your real number.')}\n\nℹ️ 𝚄𝚂𝙰𝙶𝙴\n/pair ${validExample}\n\n${toSmallCaps('Example for Uganda: /pair 2567xxxxxxxx (12 digits)')}\n${toSmallCaps('Your real number example:')} ${validExample}`, doReply(ctx))
     }
     if(/(\d)\1{5,}/.test(number) || /123456|000000|111111|xxxx/i.test(raw)){
       return ctx.reply(toSmallCaps(`❌ ғᴀᴋᴇ ɴᴜᴍʙᴇʀ ᴅᴇᴛᴇᴄᴛᴇᴅ. ᴘʟᴇᴀsᴇ ᴇɴᴛᴇʀ ʏᴏᴜʀ ʀᴇᴀʟ ɴᴜᴍʙᴇʀ. ᴇxᴀᴍᴘʟᴇ: /ᴘᴀɪʀ ${validExample}. ғᴀᴋᴇ ɴᴜᴍʙᴇʀs ᴍᴀᴋᴇ sᴇʀᴠᴇʀs ғᴜʟʟ.`), doReply(ctx))
     }
     if(number.startsWith('256') && number.length!==12){
-      return ctx.reply(toSmallCaps(`❌ ᴜɢᴀɴᴅᴀ ɴᴜᴍʙᴇʀ ᴍᴜsᴛ ʙᴇ 12 ᴅɪɢɪᴛs. ᴇx: /ᴘᴀɪʀ ${validExample}`), doReply(ctx))
+      return ctx.reply(toSmallCaps(`❌ ᴜɢ 🇺🇬 ɴᴜᴍʙᴇʀ ᴍᴜsᴛ ʙᴇ 12 ᴅɪɢɪᴛs. ᴇx: /ᴘᴀɪʀ ${validExample}`), doReply(ctx))
     }
-    let sMsg=await ctx.reply(toSmallCaps(`🔍 checking server...`), doReply(ctx))
+    let sMsg=await ctx.reply(toSmallCaps(`🔍 Checking server...`), doReply(ctx))
     await delay(500)
-    try{ await ctx.telegram.editMessageText(ctx.chat.id,sMsg.message_id,null,toSmallCaps(`🖥️ looking for server...`)) }catch{}
+    try{ await ctx.telegram.editMessageText(ctx.chat.id,sMsg.message_id,null,toSmallCaps(`🖥️ Looking for a ready server...`)) }catch{}
     await delay(600)
+    // === FIX 4 - ADDED ONLY ===
+    if(global.subbots.has(number)){
+      try{ await ctx.telegram.editMessageText(ctx.chat.id,sMsg.message_id,null,toSmallCaps(`✅ ${number} is already connected! no need to pair again.`)) }catch{ await ctx.reply(toSmallCaps(`✅ ${number} is already connected!`), doReply(ctx)) }
+      return
+    }
+    let sessPath='./sessions/'+number
+    if(fs.existsSync(sessPath)){
+      let isRegistered=false
+      try{
+        let credsPath=sessPath+'/creds.json'
+        if(fs.existsSync(credsPath)){
+          let c=JSON.parse(fs.readFileSync(credsPath))
+          if(c.registered) isRegistered=true
+        }
+      }catch{}
+      if(isRegistered){
+        saveTgSession(String(ctx.from.id), number)
+        try{ await ctx.telegram.editMessageText(ctx.chat.id,sMsg.message_id,null,toSmallCaps(`✅ ${number} already paired! reconnecting your subbot...`)) }catch{}
+        startSubBotSession(number)
+        return
+      }
+    }
+    // === END FIX 4 ===
+    // === FIX 6 - NO DUPLICATE PAIR SOCKET ===
+    if(global.pairingInProgress.has(number)){
+      try{ await ctx.telegram.editMessageText(ctx.chat.id,sMsg.message_id,null,toSmallCaps(`⏳ ${number} is already pairing, wait for code...`)) }catch{}
+      return
+    }
+    global.pairingInProgress.add(number)
+    let pairingSock=null
+    // === END FIX 6 ===
     try{
+      try{ fs.rmSync('./sessions/'+number,{recursive:true,force:true}) }catch{}
       await delay(500)
       const { version } = await fetchLatestBaileysVersion()
       const { state, saveCreds } = await useMultiFileAuthState('./sessions/'+number)
@@ -689,27 +760,52 @@ async function startTelegram(){
         connectTimeoutMs:60000, keepAliveIntervalMs:15000, defaultQueryTimeoutMs:60000,
         emitOwnEvents:false, generateHighQualityLinkPreview:false
       })
+      pairingSock=sock
       sock.ev.on('creds.update', saveCreds)
-      try{ await ctx.telegram.editMessageText(ctx.chat.id,sMsg.message_id,null,toSmallCaps(`🔗 opening socket for ${number}...`)) }catch{}
+      try{ await ctx.telegram.editMessageText(ctx.chat.id,sMsg.message_id,null,toSmallCaps(`🔗 Opening socket for ${number}...`)) }catch{}
       await delay(3500)
       const code=await sock.requestPairingCode(number)
       const clean=code.replace(/-/g,'').toUpperCase()
       saveTgSession(String(ctx.from.id), number)
+
       const cleanCode = `${clean}`
-      const pairMsg=`${toSmallCaps('🔥 pairing code generated')}\n\n📲 ${toSmallCaps(`num: ${number}`)}\n\n${toSmallCaps('your code, tap to copy')}\n\`${cleanCode}\`\n\n${toSmallCaps('open whatsapp > linked devices > link with phone number, and enter the code.')}\n> ${toSmallCaps('code expires in 60 seconds')}\n@storm x 𖤍`
+      const pairMsg=`${toSmallCaps('🔥 Pairing code generated')}\n\n📲 ${toSmallCaps(`NUM: ${number}`)}\n\n${toSmallCaps('your code, tap to copy')}\n\`${cleanCode}\`\n\n${toSmallCaps('Open whatsapp > Linked devices > Link with phone number, and enter the code.')}\n> ${toSmallCaps('CODE EXPIRES IN 60 SECONDS')}\n© STORM X 𖤍`
       const photo=await getBotPhoto(ctx)
       const kb=Markup.inlineKeyboard([[Markup.button.callback(`📋 Copy ${cleanCode}`,`copy_${cleanCode}`)],[Markup.button.url('👥 Group',GROUP_LINK), Markup.button.url('📢 Channel',CHANNEL_LINK)],[Markup.button.url('👑 Owner',OWNER_LINK)]])
       if(photo) await ctx.replyWithPhoto(photo,{caption:pairMsg, parse_mode:'Markdown',...kb,...doReply(ctx)})
       else await ctx.reply(pairMsg,{parse_mode:'Markdown',...kb,...doReply(ctx)})
+
       sock.ev.on('connection.update', u=>{
         if(u.connection==='open'){
-          connectedCount++
-          ctx.reply(toSmallCaps(`✅ ${number} connected! session saved on server.`), doReply(ctx))
-          setTimeout(()=>startSubBotSession(number), 1000)
+          global.pairingInProgress.delete(number)
+          // FIX 6: reuse this sock as subbot, do NOT call startSubBotSession
+          if(!global.subbots.has(number)){
+            global.subbots.set(number, sock)
+            if(!global.subbotOwners.includes(number)) global.subbotOwners.push(number)
+            syncConnectedCount()
+            try{
+              let db=loadSchedules(number);
+              for(let gid in db) scheduleAutoAction(sock, number, gid, db[gid].action, db[gid].executeAt);
+            }catch{}
+            sock.ev.on('messages.upsert', createMessageHandler(sock, true))
+          }
+          ctx.reply(toSmallCaps(`✅ ${number} Connected! Session saved on server.`), doReply(ctx))
+        }
+        if(u.connection==='close'){
+          global.pairingInProgress.delete(number)
+          // === FIX 7 ===
+          if(global.subbots.get(number)===sock){
+            global.subbots.delete(number); syncConnectedCount()
+            console.log(Y+`⚠️ PAIR SUBBOT ${number} CLOSED, RESTARTING 5s`+R)
+            setTimeout(()=>startSubBotSession(number),5000)
+          }
+          // === END FIX 7 ===
         }
       })
     }catch(e){
-      try{ fs.rmSync('./sessions/'+number,{recursive:true,force:true}) }catch{}
+      global.pairingInProgress.delete(number)
+      try{ pairingSock?.end?.() }catch{}
+      try{ pairingSock?.ws?.close?.() }catch{}
       await ctx.reply(toSmallCaps(`❌ ғᴀɪʟᴇᴅ ᴛᴏ ɢᴇɴᴇʀᴀᴛᴇ ᴄᴏᴅᴇ ғᴏʀ ${number}. ᴇɴᴛᴇʀ ᴀ ᴠᴀʟɪᴅ ɴᴜᴍʙᴇʀ ʟɪᴋᴇ ${validExample} ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ.`), doReply(ctx))
     }
   })
@@ -723,17 +819,17 @@ async function startTelegram(){
       if(global.subbots.has(n) || fs.existsSync('./sessions/'+n)) hasActive=true
     }
     if(hasActive){
-      await ctx.reply(toSmallCaps(`you have an active session in the server right now ✅\nnumbers: ${myNums.join(', ')}`), doReply(ctx))
+      await ctx.reply(toSmallCaps(`YOU HAVE AN ACTIVE SESSION IN THE SERVER RIGHT NOW ✅\nNUMBERS: ${myNums.join(', ')}`), doReply(ctx))
     }else{
       const kb=Markup.inlineKeyboard([[Markup.button.callback('🔗 Pair Now','pair_btn')],[Markup.button.url('👥 Group',GROUP_LINK), Markup.button.url('📢 Channel',CHANNEL_LINK)]])
-      await ctx.reply(toSmallCaps(`you dont have any active session in the server, use the pair button bellow to get connected ❌`), {...kb,...doReply(ctx)})
+      await ctx.reply(toSmallCaps(`YOU DONT HAVE ANY ACTIVE SESSION IN THE SERVER, USE THE PAIR BUTTON BELLOW TO GET CONNECTED ❌`), {...kb,...doReply(ctx)})
     }
   })
 
   bot.action('pair_btn', async (ctx)=>{
     await ctx.answerCbQuery()
     const validExample='256766233051'
-    await ctx.reply(`${toSmallCaps('❌ invalid number! please enter a valid whatsapp number with country code, no +, no spaces, no xxxx.')}\n\n${toSmallCaps('fake numbers create empty sessions and fill server storage. please use your real number.')}\n\nℹ️ 𝚄𝚂𝙰𝙶𝙴\n/pair ${validExample}\n\n${toSmallCaps('example for uganda: /pair 2567xxxxxxxx (12 digits)')}\n${toSmallCaps('your real number example:')} ${validExample}`, doReply(ctx))
+    await ctx.reply(`${toSmallCaps('❌ Invalid number! Please enter a valid WhatsApp number with country code, no +, no spaces, no xxxx.')}\n\n${toSmallCaps('Fake numbers create empty sessions and fill servers. Please use your real number.')}\n\nℹ️ 𝚄𝚂𝙰𝙶𝙴\n/pair ${validExample}\n\n${toSmallCaps('Example for Uganda: /pair 2567xxxxxxxx (12 digits)')}\n${toSmallCaps('Your real number example:')} ${validExample}`, doReply(ctx))
   })
 
   bot.command('list', async (ctx)=>{
@@ -746,12 +842,19 @@ async function startTelegram(){
         }
       }catch{}
     }
-    const chk=await ctx.reply(toSmallCaps(`🔎 checking server...`), doReply(ctx))
+    const chk=await ctx.reply(toSmallCaps(`🔎 Checking server...`), doReply(ctx))
     await delay(800)
     try{
-      const dirs=fs.readdirSync('./sessions').filter(d=>d.length>=10)
+      let dirs=fs.readdirSync('./sessions').filter(d=>d.length>=10)
+      if(ctx.chat.type==='private'){
+        let myDb=loadTgSessions(); let myNums=myDb[String(ctx.from.id)]||[];
+        dirs=dirs.filter(d=>myNums.includes(d));
+      }
       const total=dirs.length
-      let listText=`👥 ᴜsᴇʀs:\n𝙿𝙰𝙸𝚁𝙴𝙳: ${total}\n𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${connectedCount}\n𝙳𝙸𝚂𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${Math.max(0,total-connectedCount)}\n\n`
+      // === FIX 7 ===
+      const connNow=getConnected()
+      let listText=`👥 ᴜsᴇʀs:\n𝙿𝙰𝙸𝚁𝙴𝙳: ${total}\n𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${connNow}\n𝙳𝙸𝚂𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${Math.max(0,total-connNow)}\n\n`
+      // === END FIX 7 ===
       if(dirs.length>0){
         listText+=`📋 ${toSmallCaps('connected numbers list:')}\n`
         dirs.forEach((n,i)=>{
@@ -759,31 +862,37 @@ async function startTelegram(){
           listText+=`${i+1}. ${n} - ${status}\n`
         })
       }else{
-        listText+=toSmallCaps('no sessions found')
+        listText+=toSmallCaps('⚠️ no sessions found')
       }
       listText+=`\n\n𝚂𝙴𝚁𝚅𝙴𝚁(𝚂) 𝚁𝙴𝙰𝙳𝚈`
       await ctx.telegram.editMessageText(ctx.chat.id,chk.message_id,null,listText)
     }catch{
       const total=countUsers()
-      const txt=`👥 ᴜsᴇʀs:\n𝙿𝙰𝙸𝚁𝙴𝙳: ${total}\n𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${connectedCount}\n𝙳𝙸𝚂𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${Math.max(0,total-connectedCount)}\n\n𝚂𝙴𝚁𝚅𝙴𝚁(𝚂) 𝚁𝙴𝙰𝙳𝚈`
+      // === FIX 7 ===
+      const connNow=getConnected()
+      const txt=`👥 ᴜsᴇʀs:\n𝙿𝙰𝙸𝚁𝙴𝙳: ${total}\n𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${connNow}\n𝙳𝙸𝚂𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${Math.max(0,total-connNow)}\n\n𝚂𝙴𝚁𝚅𝙴𝚁(𝚂) 𝚁𝙴𝙰𝙳𝚈`
+      // === END FIX 7 ===
       await ctx.reply(txt, doReply(ctx))
     }
   })
 
   bot.command('users', async (ctx)=>{
     if(ctx.chat.type === 'private' &&!await isJoined(ctx)) return sendJoinLock(ctx)
-    const chk=await ctx.reply(toSmallCaps(`🔎 checking server...`), doReply(ctx))
+    const chk=await ctx.reply(toSmallCaps(`🔎 Checking server...`), doReply(ctx))
     await delay(700)
     const total=countUsers()
-    const txt=`👥 ᴜsᴇʀs:\n𝙿𝙰𝙸𝚁𝙴𝙳: ${total}\n𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${connectedCount}\n𝙳𝙸𝚂𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${Math.max(0,total-connectedCount)}`
+    // === FIX 7 ===
+    const connNow=getConnected()
+    const txt=`👥 ᴜsᴇʀs:\n𝙿𝙰𝙸𝚁𝙴𝙳: ${total}\n𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${connNow}\n𝙳𝙸𝚂𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${Math.max(0,total-connNow)}`
+    // === END FIX 7 ===
     try{ await ctx.telegram.editMessageText(ctx.chat.id,chk.message_id,null,txt) }catch{ await ctx.reply(txt, doReply(ctx)) }
   })
 
   bot.command('runtime', async (ctx)=>{
     const {d,h,m,s}=runtime()
-    const chk=await ctx.reply(toSmallCaps(`🔍 checking server...`), doReply(ctx))
+    const chk=await ctx.reply(toSmallCaps(`🔍 Requesting server info...`), doReply(ctx))
     await delay(600)
-    const txt=toSmallCaps(`✅️ 𝚃𝙷𝙴 𝙱𝙾𝚃 𝙷𝙰𝚂 𝙱𝙴𝙴𝙽\nrunning for ${d}d ${h}h ${m}m ${s}s`)
+    const txt=toSmallCaps(`✅️ 𝚃𝙷𝙴 𝙱𝙾𝚃 𝙷𝙰𝚂 𝙱𝙴𝙽\nRUNNING FOR ${d}d ${h}h ${m}m ${s}s`)
     try{ await ctx.telegram.editMessageText(ctx.chat.id,chk.message_id,null,txt) }catch{ await ctx.reply(txt, doReply(ctx)) }
   })
 
@@ -798,39 +907,41 @@ async function startTelegram(){
     let uptime=(process.uptime()/60).toFixed(1)
     let cpu=(Math.random()*10+1).toFixed(1)
     let ping=(Math.random()*30+10).toFixed(0)
-    let version="3.0.0"
+    let version="3.0.1"
     let text=`${toSmallCaps(`1. latency: ${latency} ms`)}\n`+
     `${toSmallCaps(`2. speed: 0.${speed.replace('.','')} s`)}\n`+
     `${toSmallCaps(`3. response: ${ping} ms`)}\n`+
     `${toSmallCaps(`4. ram usage: ${ram} mb`)}\n`+
     `${toSmallCaps(`5. cpu load: ${cpu}%`)}\n`+
     `${toSmallCaps(`6. uptime: ${uptime} min`)}\n`+
-    `${toSmallCaps(`7. version: ${version} stable`)}\n`+
-    `${toSmallCaps(`8. server: storm cloud online`)}`
+    `${toSmallCaps(`7. version: V3.0.0 stable`)}\n`+
+    `${toSmallCaps(`8. server: storm cloud `)}`
     try{ await ctx.telegram.editMessageText(ctx.chat.id,chk.message_id,null,text) }catch{ await ctx.reply(text, doReply(ctx)) }
   })
 
   bot.command('about', async (ctx)=>{
     const aboutText=`> ╭━─━─❰ 𝐀𝐁𝐎𝐔𝐓 𝐒𝐓𝐎𝐑𝐌 ❱─━─━╮
 ┃
-┃ ${toSmallCaps('the cyber bot was created by storm x')}
-┃ ${toSmallCaps('the project has taken over 3 month')}
-┃ ${toSmallCaps('to build and optimize')}
+┃ 𝐓𝐇𝐄 𝐂𝐘𝐁𝐄𝐑 𝐁𝐎𝐓 𝐖𝐀𝐒 𝐂𝐑𝐄𝐀𝐓𝐄𝐃 𝐁𝐘 𝐒𝐓𝐎𝐑𝐌 𝐗
+┃ 𝐓𝐇𝐄 𝐏𝐑𝐎𝐉𝐄𝐂𝐓 𝐇𝐀𝐒 𝐓𝐀𝐊𝐄𝐍 𝐎𝐕𝐄𝐑 𝟑 𝐌𝐎𝐍𝐓𝐇
+┃ 𝐓𝐎 𝐁𝐔𝐈𝐋𝐃 𝐀𝐍𝐃 𝐎𝐏𝐓𝐈𝐌𝐈𝐙𝐄
 ┃
-┃ ${toSmallCaps('the accounts are for one person')}
-┃ ${toSmallCaps('thats a trick to keep server clean')}
+┃ GET CONNECTED TO VIEW MORE ABOUT THE 
+┃ BOT AND GET AN ADVANCED
+┃ LEVEL OF TECHNOLOGY 
 ┃
-┃ ${toSmallCaps('storm cyber md is not just a bot')}
-┃ ${toSmallCaps('its a cyber revolution built with')}
-┃ ${toSmallCaps('passion, power & precision')}
-┃ ${toSmallCaps('fast, secure, stable & unstoppable')}
+┃ 𝐒𝐓𝐎𝐑𝐌 𝐂𝐘𝐁𝐄𝐑 𝐌𝐃 𝐈𝐒 𝐍𝐎𝐓 𝐉𝐔𝐒𝐓 𝐀 𝐁𝐎𝐓
+┃ 𝐈𝐓𝐒 𝐀 𝐂𝐘𝐁𝐄𝐑 𝐑𝐄𝐕𝐎𝐋𝐔𝐓𝐈𝐎𝐍 𝐁𝐔𝐈𝐋𝐓 𝐖𝐈𝐓𝐇
+┃ 𝐏𝐀𝐒𝐒𝐈𝐎𝐍, 𝐏𝐎𝐖𝐄𝐑 & 𝐏𝐑𝐄𝐂𝐈𝐒𝐈𝐎𝐍
+┃ 𝐅𝐀𝐒𝐓, 𝐒𝐄𝐂𝐔𝐑𝐄, 𝐒𝐓𝐀𝐁𝐋𝐄 & 𝐔𝐍𝐒𝐓𝐎𝐏𝐏𝐀𝐁𝐋𝐄
 ┃
-┃ ${toSmallCaps('powered by storm x')} 
-┃ ${toSmallCaps('version: v3.0.0 stable')}
+┃ 𝐏𝐎𝐖𝐄𝐑E𝐃 𝐁𝐘 𝐒𝐓𝐎𝐑𝐌 𝐗 
+┃ 𝐕𝐄𝐑𝐒𝐈𝐎𝐍: V3.0.0 𝐒𝐓𝐀𝐁𝐋𝐄
 ┃
 ╰━━━━━━━━━━━━━━━━━━━━╯
-@𝐒𝐓𝐎𝐑𝐌 𝐗 𖤍`
-    const kb=Markup.inlineKeyboard([[Markup.button.url('👥 Group', GROUP_LINK), Markup.button.url('📢 Channel', CHANNEL_LINK)],[Markup.button.url('👑 Dev', OWNER_LINK), Markup.button.url('👑 Creator', CREATOR_LINK)]])
+© 𝐒𝐓𝐎𝐑𝐌 𝐗 𖤍
+© DEV SILENCE`
+    const kb=Markup.inlineKeyboard([[Markup.button.url('?? Group', GROUP_LINK), Markup.button.url('📢 Channel', CHANNEL_LINK)],[Markup.button.url('👑 Dev', OWNER_LINK), Markup.button.url('👑 Creator', CREATOR_LINK)]])
     await ctx.reply(aboutText, {...kb,...doReply(ctx)})
   })
 
@@ -843,7 +954,7 @@ async function startTelegram(){
   const creatorHandler=async (ctx)=>{
     if(ctx.chat.type === 'private' &&!await isJoined(ctx)) return sendJoinLock(ctx)
     const txt=`👑 𝐁𝐎𝐓 𝐂𝐑𝐄𝐀𝐓𝐎𝐑\n\n𝐂𝐎𝐍𝐓𝐀𝐂𝐓 𝐓𝐇𝐄 𝐂𝐑𝐄𝐀𝐓𝐎𝐑\n𝐅𝐎𝐑 𝐁𝐔𝐒𝐈𝐍𝐄𝐒 & 𝐂𝐎𝐋𝐋𝐀𝐁`
-    const kb=Markup.inlineKeyboard([[Markup.button.url('💬 Creator - SYRIX',CREATOR_LINK)]])
+    const kb=Markup.inlineKeyboard([[Markup.button.url('💬 Creator - STX',CREATOR_LINK)]])
     await ctx.reply(txt,{...kb,...doReply(ctx)})
   }
 
@@ -853,63 +964,43 @@ async function startTelegram(){
 
   bot.command('disconnect', async (ctx)=>{
     if(ctx.chat.type === 'private' &&!await isJoined(ctx)) return sendJoinLock(ctx)
-    let db=loadTgSessions()
-    let myNums=db[String(ctx.from.id)]||[]
-    if(myNums.length===0){
-      let dirs=fs.readdirSync('./sessions').filter(d=>d.length>=10)
-      if(dirs.length>0) myNums=dirs
+    const n=ctx.message.text.split(' ')[1]?.replace(/[^0-9]/g,'')
+    if(!n) return ctx.reply(`ℹ️ 𝚄𝚂𝙰𝙶𝙴\n\n/disconnect <number>`, doReply(ctx))
+    if(ctx.chat.type==='private'){
+      let myDb=loadTgSessions(); let myNums=myDb[String(ctx.from.id)]||[];
+      if(!myNums.includes(n)) return ctx.reply(toSmallCaps(`❌ this number is not yours. you can only disconnect your own session.`), doReply(ctx))
     }
-    if(myNums.length===0) return ctx.reply(toSmallCaps(`⚠️ no session found.`), doReply(ctx))
-    let rows=myNums.map(n=>[Markup.button.callback(`📱 ${n}`,`del_select_${n}`)])
-    rows.push([Markup.button.callback('🗑️ delete all','del_all_confirm')])
-    rows.push([Markup.button.callback('❌ cancel','del_cancel_all')])
-    const kb=Markup.inlineKeyboard(rows)
-    await ctx.reply(toSmallCaps(`your paired numbers:\nselect number to delete, or delete all`), {...kb,...doReply(ctx)})
-  })
-
-  bot.action(/del_select_(.*)/, async (ctx)=>{
-    const n=ctx.match[1]
-    await ctx.answerCbQuery()
-    const kb=Markup.inlineKeyboard([[Markup.button.callback('✅ confirm',`del_confirm_${n}`), Markup.button.callback('❌ cancel',`del_cancel_${n}`)]])
-    await ctx.reply(toSmallCaps(`do you want to disconnect ${n}?`),{...kb,...doReply(ctx)})
-  })
-
-  bot.action('del_all_confirm', async (ctx)=>{
-    await ctx.answerCbQuery()
-    const kb=Markup.inlineKeyboard([[Markup.button.callback('✅ confirm delete all','del_all_yes'), Markup.button.callback('❌ cancel','del_cancel_all')]])
-    await ctx.reply(toSmallCaps(`do you want to delete all your paired numbers?`),{...kb,...doReply(ctx)})
-  })
-
-  bot.action('del_all_yes', async (ctx)=>{
-    await ctx.answerCbQuery(toSmallCaps('deleting all'))
-    let db=loadTgSessions()
-    let myNums=db[String(ctx.from.id)]||[]
-    if(myNums.length===0) myNums=fs.readdirSync('./sessions').filter(d=>d.length>=10)
-    for(let n of myNums){
-      try{ global.subbots.delete(n); fs.rmSync('./sessions/'+n,{recursive:true,force:true}) }catch{}
+    const chk=await ctx.reply(toSmallCaps(`🔎 Checking server...`), doReply(ctx))
+    await delay(800)
+    const exists=fs.existsSync('./sessions/'+n)
+    if(!exists){
+      try{ await ctx.telegram.editMessageText(ctx.chat.id,chk.message_id,null,toSmallCaps(`⚠️ 𝙽𝙾 𝚂𝙴𝚂𝙸𝙾𝙽 𝙵𝙾𝚄𝙽𝙳.`)) }catch{}
+      return
     }
-    clearTgSessions(String(ctx.from.id))
-    try{ await ctx.deleteMessage() }catch{}
-    await ctx.reply(toSmallCaps(`✅ all sessions disconnected.`), doReply(ctx))
+    try{ await ctx.telegram.editMessageText(ctx.chat.id,chk.message_id,null,toSmallCaps(`✅️ SESSION FOR ${n} FOUND`)) }catch{}
+    const kb=Markup.inlineKeyboard([[Markup.button.callback('✅ Confirm',`del_confirm_${n}`), Markup.button.callback('❌ Cancel',`del_cancel_${n}`)]])
+    await ctx.reply(toSmallCaps(`Do you want to disconnect ${n}?`),{...kb,...doReply(ctx)})
   })
 
   bot.action(/del_confirm_(.*)/, async (ctx)=>{
     const n=ctx.match[1]
-    try{ global.subbots.delete(n); fs.rmSync('./sessions/'+n,{recursive:true,force:true}) }catch{}
-    removeTgSession(String(ctx.from.id), n)
+    if(ctx.chat.type==='private'){
+      let myDb=loadTgSessions(); let myNums=myDb[String(ctx.from.id)]||[];
+      if(!myNums.includes(n)){ await ctx.answerCbQuery(toSmallCaps('not your session')); return ctx.reply(toSmallCaps(`❌ you cannot delete another user's session.`), doReply(ctx)) }
+    }
+    try{ fs.rmSync('./sessions/'+n,{recursive:true,force:true}) }catch{}
+    try{ let db=loadTgSessions(); let arr=db[String(ctx.from.id)]||[]; db[String(ctx.from.id)]=arr.filter(x=>x!==n); fs.writeFileSync(getTgSessionFile(), JSON.stringify(db,null,2)) }catch{}
+    // === FIX 7 ===
+    if(global.subbots.has(n)){ try{ global.subbots.get(n).end?.() }catch{}; global.subbots.delete(n); syncConnectedCount() }
+    // === END FIX 7 ===
     await ctx.answerCbQuery(toSmallCaps('deleted'))
     try{ await ctx.deleteMessage() }catch{}
-    await ctx.reply(toSmallCaps(`✅ session ${n} disconnected.`), doReply(ctx))
+    await ctx.reply(toSmallCaps(`✅ Session ${n} disconnected.`), doReply(ctx))
   })
   bot.action(/del_cancel_(.*)/, async (ctx)=>{
     await ctx.answerCbQuery(toSmallCaps('cancelled'))
     try{ await ctx.deleteMessage() }catch{}
-    await ctx.reply(toSmallCaps(`❌ cancelled.`), doReply(ctx))
-  })
-  bot.action('del_cancel_all', async (ctx)=>{
-    await ctx.answerCbQuery(toSmallCaps('cancelled'))
-    try{ await ctx.deleteMessage() }catch{}
-    await ctx.reply(toSmallCaps(`❌ cancelled.`), doReply(ctx))
+    await ctx.reply(toSmallCaps(`❌ Cancelled.`), doReply(ctx))
   })
 
   bot.on('callback_query', async (ctx)=>{
@@ -954,14 +1045,14 @@ async function startWhatsApp(){
   }
   sock.ev.on('connection.update', u=>{
     if(u.connection==='open'){
-      console.log(G+B+'\n✅ WHATSAPP BOT CONNECTED!\n'+R); connectedCount++; try{rl.close()}catch{}
+      console.log(G+B+'\n✅ WHATSAPP BOT CONNECTED!\n'+R); try{rl.close()}catch{}
       try{
         let botId=sock.user.id.split(':')[0];
         let db=loadSchedules(botId);
         for(let gid in db) scheduleAutoAction(sock, botId, gid, db[gid].action, db[gid].executeAt);
       }catch{}
     }
-    if(u.connection==='close'){ console.log(Rd+'WhatsApp closed, restarting 3s...'+R); connectedCount=Math.max(0,connectedCount-1); setTimeout(startWhatsApp,3000) }
+    if(u.connection==='close'){ console.log(Rd+'WhatsApp closed, restarting 3s...'+R); setTimeout(startWhatsApp,3000) }
   })
   try{
     const files=fs.readdirSync(commandFolder)
@@ -988,8 +1079,8 @@ async function startWhatsApp(){
                   await sock.sendMessage(anu.id,{text:`ᴀɴᴛɪᴅᴇᴍᴏᴛᴇ ᴀᴄᴛɪᴠᴇ, ᴘʀᴏᴍᴏᴛᴇᴅ ʙᴀᴄᴋ @${jid.split('@')[0]}`, mentions:[jid]}).catch(()=>{});
                 }
               }
-            }
-          }catch{}
+            }catch{}
+          }
         }
       }
     }
@@ -1048,8 +1139,10 @@ async function startWhatsApp(){
                 await sock.sendMessage(anu.id,{text:`╭───「 ᴀᴜᴛᴏ ᴋɪᴄᴋ 」───\n│ 🤖 @${jid.split('@')[0]} ᴀᴜᴛᴏ ᴋɪᴄᴋᴇᴅ\n╰────────────────`, mentions:[jid]}).catch(()=>{});
               }
             }
-        }
+          }catch{}
+        }catch{}
       }
+    }
     if(anu.action==="promote"){
       let apFile=`./database/antipromote_${botId}.json`;
       if(fs.existsSync(apFile)){
@@ -1065,8 +1158,8 @@ async function startWhatsApp(){
                   await sock.sendMessage(anu.id,{text:`ᴀɴᴛɪᴘʀᴏᴍᴏᴛᴇ ᴀᴄᴛɪᴠᴇ, ᴅᴇᴍᴏᴛᴇᴅ @${jid.split('@')[0]}`, mentions:[jid]}).catch(()=>{});
                 }
               }
-            }
-          }catch{}
+            }catch{}
+          }
         }
       }
     }

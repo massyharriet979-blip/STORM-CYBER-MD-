@@ -20,19 +20,22 @@ execute: async(sock, m, args)=>{
 
   await sock.sendMessage(m.chat,{react:{text:"📡",key:m.key}}).catch(()=>{})
 
+  let packets = Math.floor(Math.random() * 900) + 100;
+  let iface = "wlan0";
+
   await new Promise(r=>setTimeout(r,800))
   await sock.sendMessage(m.chat,{
-   text:`${toSmallCaps("starting sniff [sim]")}...\n${toSmallCaps("${packets}`)} packets real")}`
+   text:`${toSmallCaps("starting sniff [sim]")}...\n${toSmallCaps(packets + " packets real")}`
   },{quoted:m})
 
   await new Promise(r=>setTimeout(r,1200))
 
   let txt=`
 ╭══〘 📡 𝐒𝐍𝐈𝐅𝐅𝐄𝐑 𝐒𝐈𝐌 〙══⊷❍
-┃ ${toSmallCaps(`interface: ${interface}`)} [sim]`)}
-┃ ${toSmallCaps(`packets: ${packets}`)} real - sim only`)}
-┃ ${toSmallCaps(`filter: unblocked`)}
-┃ ${toSmallCaps(`status: simulation complete`)}
+┃ ${toSmallCaps("interface: " + iface + " [sim]")}
+┃ ${toSmallCaps("packets: " + packets + " real - sim only")}
+┃ ${toSmallCaps("filter: unblocked")}
+┃ ${toSmallCaps("status: simulation complete")}
 ┃
 ┃ ${toSmallCaps(" sniffing - ui only")}
 ╰═══════════════════⊷❍
@@ -43,4 +46,4 @@ execute: async(sock, m, args)=>{
   await sock.sendMessage(m.chat,{react:{text:"☠️",key:m.key}}).catch(()=>{})
  }catch(e){console.log(e)}
 }
-}
+};

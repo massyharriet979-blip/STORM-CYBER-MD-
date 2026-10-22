@@ -15,18 +15,22 @@ execute: async(sock, m, args)=>{
   let query = args.join(" ")
   if(!query) return sock.sendMessage(m.chat,{text:`${toSmallCaps("usage:.darknet [target] e.g.darknet facebook")}`},{quoted:m})
 
+  let leaks = Math.floor(Math.random() * 50) + 5;
+  let password = Math.floor(Math.random() * 900) + 100;
+  let cards = Math.floor(Math.random() * 100) + 10;
+
   await sock.sendMessage(m.chat,{text:`${toSmallCaps("connecting to tor network...")}\n${toSmallCaps("routing via:")} 🇩🇪 > 🇷🇺 > 🇨🇭`},{quoted:m})
 
   setTimeout(async()=>{
-   await sock.sendMessage(m.chat,{text:`${toSmallCaps("searching darknet for")}: ${query}...\n${toSmallCaps("found ${leaks}`)} leaked databases")}`},{quoted:m})
+   await sock.sendMessage(m.chat,{text:`${toSmallCaps("searching darknet for")}: ${query}...\n${toSmallCaps("found " + leaks + " leaked databases")}`},{quoted:m})
   },1200)
   setTimeout(async()=>{
    let txt = `◈ ${toSmallCaps("darknet result")}
 
 ${toSmallCaps("query:")} ${query}
-${toSmallCaps("leaks:")} ${leaks}`)}
-${toSmallCaps("passwords:")} ${password}`)}
-${toSmallCaps("credit cards:")} ${cards}`)}
+${toSmallCaps("leaks:")} ${leaks}
+${toSmallCaps("passwords:")} ${password}
+${toSmallCaps("credit cards:")} ${cards}
 ${toSmallCaps("status:")} ${toSmallCaps("encrypted")}
 
 > ${toSmallCaps("result hidden for security")}
@@ -38,4 +42,4 @@ ${toSmallCaps("                                ")}`
 
  }catch(e){console.log(e)}
 }
-}
+};

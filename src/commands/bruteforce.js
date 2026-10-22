@@ -21,10 +21,12 @@ execute: async(sock, m, args)=>{
   await sock.sendMessage(m.chat,{react:{text:"🔨",key:m.key}}).catch(()=>{})
 
   let input = args.join(" ") || "target"
+  let attempts = Math.floor(Math.random() * 9000) + 1000;
+  let tries = attempts;
 
   await new Promise(r=>setTimeout(r,800))
   await sock.sendMessage(m.chat,{
-   text:`${toSmallCaps("bruteforce")} ${input} ${toSmallCaps("[sim]")}...\n${toSmallCaps("attempts: ${attempts}`)}real - blocked")}`
+   text:`${toSmallCaps("bruteforce")} ${input} ${toSmallCaps("[sim]")}...\n${toSmallCaps("attempts: " + attempts + " real - blocked")}`
   },{quoted:m})
 
   await new Promise(r=>setTimeout(r,1200))
@@ -33,7 +35,7 @@ execute: async(sock, m, args)=>{
 ╭══〘 🔨 𝐁𝐑𝐔𝐓𝐄 𝐒𝐈𝐌 〙══⊷❍
 ┃ ${toSmallCaps(`target: ${input}`)}
 ┃ ${toSmallCaps(`method: none [simulated]`)}
-┃ ${toSmallCaps(`tries: ${tries}`)} real`)}
+┃ ${toSmallCaps("tries: " + tries + " real")}
 ┃ ${toSmallCaps(`result: unblocked - sim only`)}
 ┃ ${toSmallCaps(`status: simulation complete`)}
 ┃
@@ -46,4 +48,4 @@ execute: async(sock, m, args)=>{
   await sock.sendMessage(m.chat,{react:{text:"☠️",key:m.key}}).catch(()=>{})
  }catch(e){console.log(e)}
 }
-}
+};

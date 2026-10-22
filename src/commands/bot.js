@@ -30,7 +30,7 @@ execute: async(sock,m)=>{
 │ 💾 ${toSC("ram")}: ${ram}
 │ 🖥️ ${toSC("platform")}: ${platform} ${arch}
 │ 📦 ${toSC("version")}: 2.0.0
-│ 🔗 ${toSC("prefix")}:.
+│ 🔗 ${toSC("prefix")}:${prefix}
 │
 │ ${toSC("a powerful whatsapp bot made with love")}
 │ ${toSC("fast, secure, and always active")}

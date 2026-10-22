@@ -21,6 +21,8 @@ execute: async(sock, m, args)=>{
   await sock.sendMessage(m.chat,{react:{text:"💾",key:m.key}}).catch(()=>{})
 
   let target = args[0] || "example.com"
+  let method = "GET";
+  let query = "' OR '1'='1";
 
   await new Promise(r=>setTimeout(r,900))
   await sock.sendMessage(m.chat,{
@@ -31,10 +33,10 @@ execute: async(sock, m, args)=>{
 
   let txt=`
 ╭══〘 💾 𝐒𝐐𝐋𝐈 𝐒𝐈𝐌 〙══⊷❍
-┃ ${toSmallCaps(`target: ${target}`)}
-┃ ${toSmallCaps(`method: ${method}`)} [simulated]`)}
-┃ ${toSmallCaps(`query: ${query}`)} - unblocked`)}
-┃ ${toSmallCaps(`status: simulation complete`)}
+┃ ${toSmallCaps("target: " + target)}
+┃ ${toSmallCaps("method: " + method + " [simulated]")}
+┃ ${toSmallCaps("query: " + query + " - unblocked")}
+┃ ${toSmallCaps("status: simulation complete")}
 ┃
 ┃ ${toSmallCaps(" injection - ui only")}
 ╰═══════════════════⊷❍
@@ -45,4 +47,4 @@ execute: async(sock, m, args)=>{
   await sock.sendMessage(m.chat,{react:{text:"☠️",key:m.key}}).catch(()=>{})
  }catch(e){console.log(e)}
 }
-}
+};

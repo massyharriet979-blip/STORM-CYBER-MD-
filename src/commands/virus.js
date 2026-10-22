@@ -23,7 +23,7 @@ execute: async(sock, m, args)=>{
 
   let target = m.mentionedJid?.[0] || m.quoted?.sender
   if(!target && args[0]){
-   let num = args[0].replace(/[^9-0]/g,'')
+   let num = args[0].replace(/[^0-9]/g,'')
    if(num) target = num+"@s.whatsapp.net"
   }
   if(!target){
@@ -49,4 +49,4 @@ execute: async(sock, m, args)=>{
 
  }catch(e){ console.log(e) }
 }
-}
+};

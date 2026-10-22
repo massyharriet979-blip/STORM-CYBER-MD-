@@ -1,35 +1,57 @@
-const fs=require('fs')
+import fs from "fs"
 
-module.exports={
+function toSmallCaps(t){
+ const m={a:'ᴀ',b:'ʙ',c:'ᴄ',d:'ᴅ',e:'ᴇ',f:'ғ',g:'ɢ',h:'ʜ',i:'ɪ',j:'ᴊ',k:'ᴋ',l:'ʟ',m:'ᴍ',n:'ɴ',o:'ᴏ',p:'ᴘ',q:'ǫ',r:'ʀ',s:'s',t:'ᴛ',u:'ᴜ',v:'ᴠ',w:'ᴡ',x:'x',y:'ʏ',z:'ᴢ'}
+ return t.toLowerCase().split('').map(c=>m[c]||c).join('')
+}
+
+export default {
 name:"delvar",
-aliases:["del","rmvar","dvar"],
-execute: async(sock,m,args)=>{
+alias:["deletevar","delvars"],
+execute: async(sock, m, args)=>{
  try{
-  let botId=sock.user?.id?.split(":")[0].split("@")[0]||""
-  let sender=m.sender.split("@")[0]
-  if(sender!==botId) return await sock.sendMessage(m.chat,{text:"ᴏᴡɴᴇʀ ᴏɴʟʏ"},{quoted:m})
-
-  if(!args[0]) return await sock.sendMessage(m.chat,{text:"ᴜsᴀɢᴇ:.ᴅᴇʟᴠᴀʀ KEY\nᴇx:.ᴅᴇʟᴠᴀʀ PREFIX"},{quoted:m})
-
-  let key=args[0].toUpperCase()
-  let file='./database/vars.json'
-  let data={}
-  try{ if(fs.existsSync(file)) data=JSON.parse(fs.readFileSync(file)) }catch{ data={} }
-
-  if(!data[key]) return await sock.sendMessage(m.chat,{text:`ɴᴏᴛ ғᴏᴜɴᴅ: ${key}`},{quoted:m})
-
-  // block destruct of important vars
-  let blocked=["SESSION_ID","SESSION","MONGODB","DATABASE_URL"]
-  if(blocked.includes(key)){
-    return await sock.sendMessage(m.chat,{text:`⚠️ ᴄᴀɴᴛ ᴅᴇʟᴇᴛᴇ ${key}\n> ᴘʀᴏᴛᴇᴄᴛᴇᴅ - ғᴀᴋᴇ sᴀғᴇ ᴍᴏᴅᴇ`},{quoted:m})
+  if(!m.isOwner && !m.isSubBotOwner){
+   return sock.sendMessage(m.chat,{
+    text:`╭══〘 🔐 〙══⊷❍
+┃ ${toSmallCaps("quantum clearance required, owner only")}
+╰═══════════════════⊷❍
+> ${toSmallCaps("powered by storm cyber md")}`
+   },{quoted:m})
   }
 
-  // fake delete - actually deletes from vars.json only, not.env
-  delete data[key]
-  fs.writeFileSync(file, JSON.stringify(data,null,2))
+  let key = args[0]
+  if(!key){
+   return sock.sendMessage(m.chat,{
+    text:`╭══〘 🗑️ 𝐃𝐄𝐋𝐕𝐀𝐑 〙══⊷❍
+┃ ${toSmallCaps("usage")}: .delvar PREFIX
+┃ ${toSmallCaps("usage")}: .delvar MODE
+╰═══════════════════⊷❍
+> ${toSmallCaps("powered by storm cyber md")}`
+   },{quoted:m})
+  }
 
-  await sock.sendMessage(m.chat,{text:`✅ ᴅᴇʟᴇᴛᴇᴅ [ғᴀᴋᴇ sᴀғᴇ]\n\n🔑 ${key}\n> ʀᴇᴍᴏᴠᴇᴅ ғʀᴏᴍ ᴠᴀʀs.ᴊsᴏɴ ᴏɴʟʏ\n> ɴᴏ ᴅᴇsᴛʀᴜᴄᴛ ᴛᴏ.ᴇɴᴠ`},{quoted:m})
+  key = key.toUpperCase()
+  delete process.env[key]
+  if(global.botSettings){
+   delete global.botSettings[key]
+   delete global.botSettings[key.toLowerCase()]
+  }
 
- }catch(e){ await sock.sendMessage(m.chat,{text:`ᴇʀʀ: ${e.message}`},{quoted:m}) }
+  try{
+   let envPath = ".env"
+   if(fs.existsSync(envPath)){
+    let content = fs.readFileSync(envPath,"utf8")
+    let lines = content.split("\n").filter(l=>!l.startsWith(key+"="))
+    fs.writeFileSync(envPath, lines.join("\n"))
+   }
+  }catch{}
+
+  await sock.sendMessage(m.chat,{
+   text:`╭══〘 🗑️ 𝐃𝐄𝐋𝐕𝐀𝐑 〙══⊷❍
+┃ ${key} ${toSmallCaps("deleted successfully")}
+╰═══════════════════⊷❍
+> ${toSmallCaps("powered by storm cyber md")}`
+  },{quoted:m})
+ }catch(e){console.log(e)}
 }
-}
+};
