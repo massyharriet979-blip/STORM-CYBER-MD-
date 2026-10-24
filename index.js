@@ -608,7 +608,7 @@ async function startSubBotSession(phoneNumber){
                   }
                 }
               }
-            }catch{}
+          }catch{}
           }
         }
       }
@@ -1079,11 +1079,11 @@ async function startWhatsApp(){
                   await sock.sendMessage(anu.id,{text:`ᴀɴᴛɪᴅᴇᴍᴏᴛᴇ ᴀᴄᴛɪᴠᴇ, ᴘʀᴏᴍᴏᴛᴇᴅ ʙᴀᴄᴋ @${jid.split('@')[0]}`, mentions:[jid]}).catch(()=>{});
                 }
               }
+            }
             }catch{}
           }
         }
       }
-    }
     const WELCOME_IMG='https://files.catbox.moe/jtb63o.jpg';
     const CHANNEL_JID='120363414065055650@newsletter';
     const CHANNEL_LINK='https://whatsapp.com/channel/0029Vb8NIZf4SpkJvluL3G3P';
@@ -1139,8 +1139,8 @@ async function startWhatsApp(){
                 await sock.sendMessage(anu.id,{text:`╭───「 ᴀᴜᴛᴏ ᴋɪᴄᴋ 」───\n│ 🤖 @${jid.split('@')[0]} ᴀᴜᴛᴏ ᴋɪᴄᴋᴇᴅ\n╰────────────────`, mentions:[jid]}).catch(()=>{});
               }
             }
+            }
           }catch{}
-        }catch{}
       }
     }
     if(anu.action==="promote"){
@@ -1158,11 +1158,11 @@ async function startWhatsApp(){
                   await sock.sendMessage(anu.id,{text:`ᴀɴᴛɪᴘʀᴏᴍᴏᴛᴇ ᴀᴄᴛɪᴠᴇ, ᴅᴇᴍᴏᴛᴇᴅ @${jid.split('@')[0]}`, mentions:[jid]}).catch(()=>{});
                 }
               }
+            }
             }catch{}
           }
         }
       }
-    }
    }catch(e){ console.log('group update err', e.message); }
   });
   await delay(3000)
