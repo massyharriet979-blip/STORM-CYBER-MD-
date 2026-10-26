@@ -29,6 +29,9 @@ global.subbots = new Map()
 global.subbotOwners = []
 global.commands = new Map()
 global.pairingInProgress = new Set()
+global.sessionMeta = new Map()
+function setMeta(n,d){let o=global.sessionMeta.get(n)||{};global.sessionMeta.set(n,{...o,...d})}
+function fmtTime(ts){if(!ts) return 'unknown';let d=new Date(ts);return d.toLocaleString('en-GB',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})}
 let startTime = Date.now()
 let connectedCount = 0
 // === FIX 7 - TRUE COUNT ===
@@ -550,6 +553,7 @@ async function startSubBotSession(phoneNumber){
     sock.ev.on('creds.update', saveCreds)
     sock.ev.on('connection.update', (u)=>{
       if(u.connection==='open'){
+        setMeta(id,{connectedAt:Date.now(),pairedAt:global.sessionMeta.get(id)?.pairedAt||Date.now(),disconnectedAt:null,isConnected:true})
         console.log(G+`✅ SUBBOT ${id} CONNECTED`+R)
         if(!global.subbots.has(id)) global.subbots.set(id, sock)
         if(!global.subbotOwners.includes(id)) global.subbotOwners.push(id)
@@ -565,7 +569,8 @@ async function startSubBotSession(phoneNumber){
         // === FIX 7 ===
         if(global.subbots.has(id)){ global.subbots.delete(id); syncConnectedCount() }
         // === END FIX 7 ===
-        console.log(Y+`⚠️ SUBBOT ${id} CLOSED, RESTARTING 5s`+R)
+        setMeta(id,{disconnectedAt:Date.now(),isConnected:false})
+        console.log(Y+`⚠️ SUBBOT ${id} CLOSED`+R)
         setTimeout(()=>startSubBotSession(id),5000)
       }
     })
@@ -718,7 +723,7 @@ async function startTelegram(){
     await delay(600)
     // === FIX 4 - ADDED ONLY ===
     if(global.subbots.has(number)){
-      try{ await ctx.telegram.editMessageText(ctx.chat.id,sMsg.message_id,null,toSmallCaps(`✅ ${number} is already connected! no need to pair again.`)) }catch{ await ctx.reply(toSmallCaps(`✅ ${number} is already connected!`), doReply(ctx)) }
+      try{ await ctx.telegram.editMessageText(ctx.chat.id,sMsg.message_id,null,toSmallCaps(`✅ ${number} IS CONNECTED NO NEED TO PAIR AGAIN`)) }catch{ await ctx.reply(toSmallCaps(`✅ ${number} IS CONNECTED NO NEED TO PAIR AGAIN`), doReply(ctx)) }
       return
     }
     let sessPath='./sessions/'+number
@@ -733,9 +738,7 @@ async function startTelegram(){
       }catch{}
       if(isRegistered){
         saveTgSession(String(ctx.from.id), number)
-        try{ await ctx.telegram.editMessageText(ctx.chat.id,sMsg.message_id,null,toSmallCaps(`✅ ${number} already paired! reconnecting your subbot...`)) }catch{}
-        startSubBotSession(number)
-        return
+        try{ await ctx.telegram.editMessageText(ctx.chat.id,sMsg.message_id,null,toSmallCaps(`✅ ${number} was paired before, generating new code for your saved session...`)) }catch{}
       }
     }
     // === END FIX 4 ===
@@ -748,14 +751,14 @@ async function startTelegram(){
     let pairingSock=null
     // === END FIX 6 ===
     try{
-      try{ fs.rmSync('./sessions/'+number,{recursive:true,force:true}) }catch{}
+      try{ let _c='./sessions/'+number+'/creds.json'; let _reg=false; try{ if(fs.existsSync(_c)) _reg=JSON.parse(fs.readFileSync(_c)).registered }catch{}; if(!_reg) fs.rmSync('./sessions/'+number,{recursive:true,force:true}) }catch{}
       await delay(500)
       const { version } = await fetchLatestBaileysVersion()
       const { state, saveCreds } = await useMultiFileAuthState('./sessions/'+number)
       const sock = makeWASocket({
         version, logger:pino({level:'silent'}),
         auth:{creds:state.creds, keys:makeCacheableSignalKeyStore(state.keys,pino({level:'silent'}))},
-        browser:Browsers.macOS('Safari'),
+        browser:Browsers.ubuntu('Chrome'),
         printQRInTerminal:false, syncFullHistory:false, markOnlineOnConnect:false,
         connectTimeoutMs:60000, keepAliveIntervalMs:15000, defaultQueryTimeoutMs:60000,
         emitOwnEvents:false, generateHighQualityLinkPreview:false
@@ -766,14 +769,11 @@ async function startTelegram(){
       await delay(3500)
       const code=await sock.requestPairingCode(number)
       const clean=code.replace(/-/g,'').toUpperCase()
-      saveTgSession(String(ctx.from.id), number)
+      saveTgSession(String(ctx.from.id), number); setMeta(number,{pairedAt:Date.now(),isConnected:false})
 
       const cleanCode = `${clean}`
       const pairMsg=`${toSmallCaps('🔥 Pairing code generated')}\n\n📲 ${toSmallCaps(`NUM: ${number}`)}\n\n${toSmallCaps('your code, tap to copy')}\n\`${cleanCode}\`\n\n${toSmallCaps('Open whatsapp > Linked devices > Link with phone number, and enter the code.')}\n> ${toSmallCaps('CODE EXPIRES IN 60 SECONDS')}\n© STORM X 𖤍`
-      const photo=await getBotPhoto(ctx)
-      const kb=Markup.inlineKeyboard([[Markup.button.callback(`📋 Copy ${cleanCode}`,`copy_${cleanCode}`)],[Markup.button.url('👥 Group',GROUP_LINK), Markup.button.url('📢 Channel',CHANNEL_LINK)],[Markup.button.url('👑 Owner',OWNER_LINK)]])
-      if(photo) await ctx.replyWithPhoto(photo,{caption:pairMsg, parse_mode:'Markdown',...kb,...doReply(ctx)})
-      else await ctx.reply(pairMsg,{parse_mode:'Markdown',...kb,...doReply(ctx)})
+      await ctx.reply(pairMsg,{parse_mode:'Markdown',...doReply(ctx)})
 
       sock.ev.on('connection.update', u=>{
         if(u.connection==='open'){
@@ -789,15 +789,16 @@ async function startTelegram(){
             }catch{}
             sock.ev.on('messages.upsert', createMessageHandler(sock, true))
           }
-          ctx.reply(toSmallCaps(`✅ ${number} Connected! Session saved on server.`), doReply(ctx))
+          setMeta(number,{connectedAt:Date.now(),pairedAt:global.sessionMeta.get(number)?.pairedAt||Date.now(),isConnected:true}); ctx.reply(toSmallCaps(`✅ ${number} Connected! Session saved on server.`), doReply(ctx))
         }
         if(u.connection==='close'){
+          console.log('PAIR CLOSE CODE', u.lastDisconnect?.error?.output?.statusCode, u.lastDisconnect?.error?.message)
           global.pairingInProgress.delete(number)
           // === FIX 7 ===
           if(global.subbots.get(number)===sock){
             global.subbots.delete(number); syncConnectedCount()
             console.log(Y+`⚠️ PAIR SUBBOT ${number} CLOSED, RESTARTING 5s`+R)
-            setTimeout(()=>startSubBotSession(number),5000)
+            setTimeout(()=>startSubBotSession(number), u.lastDisconnect?.error?.output?.statusCode===515?10000:5000)
           }
           // === END FIX 7 ===
         }
@@ -814,15 +815,21 @@ async function startTelegram(){
     if(ctx.chat.type === 'private' &&!await isJoined(ctx)) return sendJoinLock(ctx)
     let db=loadTgSessions()
     let myNums=db[String(ctx.from.id)]||[]
-    let hasActive=false
-    for(let n of myNums){
-      if(global.subbots.has(n) || fs.existsSync('./sessions/'+n)) hasActive=true
+    let photo=await getBotPhoto(ctx)
+    if(myNums.length===0){
+      let txt0=toSmallCaps(`you dont have any active session in the server, use the pair button bellow to get connected ❌`)
+      if(photo) await ctx.replyWithPhoto(photo,{caption:txt0,...doReply(ctx)}); else await ctx.reply(txt0, doReply(ctx)); return
     }
-    if(hasActive){
-      await ctx.reply(toSmallCaps(`YOU HAVE AN ACTIVE SESSION IN THE SERVER RIGHT NOW ✅\nNUMBERS: ${myNums.join(', ')}`), doReply(ctx))
-    }else{
-      const kb=Markup.inlineKeyboard([[Markup.button.callback('🔗 Pair Now','pair_btn')],[Markup.button.url('👥 Group',GROUP_LINK), Markup.button.url('📢 Channel',CHANNEL_LINK)]])
-      await ctx.reply(toSmallCaps(`YOU DONT HAVE ANY ACTIVE SESSION IN THE SERVER, USE THE PAIR BUTTON BELLOW TO GET CONNECTED ❌`), {...kb,...doReply(ctx)})
+    let onlineNums=myNums.filter(n=>global.subbots.has(n))
+    let pairedCount=myNums.length
+    if(onlineNums.length>0){
+      let meta=global.sessionMeta.get(onlineNums[0])||{}
+      let txt=toSmallCaps(`you have an active session in the server right now ✅️\n\nrun time: ${fmtTime(meta.pairedAt||meta.connectedAt)}\npaired: ${pairedCount}\nstatus: online 🟢`)
+      if(photo) await ctx.replyWithPhoto(photo,{caption:txt,...doReply(ctx)}); else await ctx.reply(txt, doReply(ctx))
+    } else {
+      let meta=global.sessionMeta.get(myNums[0])||{}
+      let txt=toSmallCaps(`you paired your number but its temporarily saved on the server\n\ndisconnected when: ${fmtTime(meta.disconnectedAt)}\npaired: ${pairedCount}\nstatus: stopped / offline 🔴`)
+      if(photo) await ctx.replyWithPhoto(photo,{caption:txt,...doReply(ctx)}); else await ctx.reply(txt, doReply(ctx))
     }
   })
 
