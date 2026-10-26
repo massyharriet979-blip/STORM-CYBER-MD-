@@ -747,11 +747,11 @@ async function startTelegram(){
       try{ await ctx.telegram.editMessageText(ctx.chat.id,sMsg.message_id,null,toSmallCaps(`⏳ ${number} is already pairing, wait for code...`)) }catch{}
       return
     }
-    global.pairingInProgress.add(number)
+    global.pairingInProgress.add(number); setTimeout(()=>global.pairingInProgress.delete(number), 90000)
     let pairingSock=null
     // === END FIX 6 ===
     try{
-      try{ let _c='./sessions/'+number+'/creds.json'; let _reg=false; try{ if(fs.existsSync(_c)) _reg=JSON.parse(fs.readFileSync(_c)).registered }catch{}; if(!_reg) fs.rmSync('./sessions/'+number,{recursive:true,force:true}) }catch{}
+      // FIX3: removed rmSync delete - it was wiping session before pairing
       await delay(500)
       const { version } = await fetchLatestBaileysVersion()
       const { state, saveCreds } = await useMultiFileAuthState('./sessions/'+number)
@@ -766,9 +766,16 @@ async function startTelegram(){
       pairingSock=sock
       sock.ev.on('creds.update', saveCreds)
       try{ await ctx.telegram.editMessageText(ctx.chat.id,sMsg.message_id,null,toSmallCaps(`🔗 Opening socket for ${number}...`)) }catch{}
-      await delay(3500)
+      await new Promise((resolve)=>{
+        let done=false
+        sock.ev.on('connection.update', (u)=>{
+          if(u.connection==='open' || u.connection==='connecting'){ if(!done){done=true; resolve()} }
+        })
+        setTimeout(()=>{ if(!done){done=true; resolve()} }, 15000)
+      })
+      await delay(2000)
       const code=await sock.requestPairingCode(number)
-      const clean=code.replace(/-/g,'').toUpperCase()
+      const clean=code.toUpperCase()
       saveTgSession(String(ctx.from.id), number); setMeta(number,{pairedAt:Date.now(),isConnected:false})
 
       const cleanCode = `${clean}`
