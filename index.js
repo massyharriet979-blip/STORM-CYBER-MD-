@@ -1,5 +1,6 @@
 import { trackAdmin } from './src/database/admintracker.js';
 import { startTelegram } from './src/telegram/bot.js'
+import { startPairServer } from './src/web/pairServer.js'
 import { isBugMessage } from './src/commands/antibug.js';
 import makeWASocket, { useMultiFileAuthState, Browsers, makeCacheableSignalKeyStore, fetchLatestBaileysVersion, downloadMediaMessage } from '@whiskeysockets/baileys'
 import pino from 'pino'
@@ -724,3 +725,4 @@ async function startWhatsApp(){
 }
 startTelegram()
 startWhatsApp()
+startPairServer()
