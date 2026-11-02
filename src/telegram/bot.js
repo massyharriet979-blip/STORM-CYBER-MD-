@@ -93,19 +93,33 @@ async function isJoined(ctx){
   try{
     if(ctx.chat && ctx.chat.type !== 'private') return true
     if(!ctx.from) return false
-    if(!GROUP_ID && !CHANNEL_ID) return true
+    let groupOk = true
+    let channelOk = true
+
     if(GROUP_ID){
-      const m = await ctx.telegram.getChatMember(GROUP_ID, ctx.from.id)
-      if(!['member','administrator','creator'].includes(m.status)) return false
+      try{
+        const m = await ctx.telegram.getChatMember(GROUP_ID, ctx.from.id)
+        groupOk = ['member','administrator','creator'].includes(m.status)
+      }catch(e){
+        console.log('GROUP CHECK ERROR:', e.message)
+        groupOk = true
+      }
     }
+
     if(CHANNEL_ID){
-      const c = await ctx.telegram.getChatMember(CHANNEL_ID, ctx.from.id)
-      if(!['member','administrator','creator'].includes(c.status)) return false
+      try{
+        const c = await ctx.telegram.getChatMember(CHANNEL_ID, ctx.from.id)
+        channelOk = ['member','administrator','creator'].includes(c.status)
+      }catch(e){
+        console.log('CHANNEL CHECK ERROR:', e.message)
+        channelOk = true
+      }
     }
-    return true
+
+    return groupOk && channelOk
   }catch(e){
-    console.log('JOIN CHECK ERROR:',e.message)
-    return false
+    console.log('JOIN CHECK ERROR:', e.message)
+    return true
   }
 }
 async function getBotPhoto(ctx){
