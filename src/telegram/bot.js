@@ -138,12 +138,12 @@ async function sendMainMenu(ctx){
   const now=new Date()
   const dateStr=`${now.getDate()} ${now.getMonth()+1} ${now.getFullYear()}`
   const user=ctx.from.first_name||'User'
-  const msg=`<blockquote>╭━─━─━─❰ 𝐒𝐓𝐎𝐑𝐌 𝐂𝐘𝐁𝐄𝐑 𝐌𝐃 ❱─━─━─━╮
+  const msg=`<blockquote>╭━─━─❰ 𝐒𝐓𝐎𝐑𝐌 𝐂𝐘𝐁𝐄𝐑 𝐌𝐃 ❱─━─━╮
 ┃${toSmallCaps(`HEY 👋 ${user}`)}
 ┃${toSmallCaps('WELCOME TO STORM CYBER MD')}
-┃━━━━━━━━━━━━━━━━━━━━━━━━━━━❐
-┃╔══『 🛡️ CYBER ADVANCED MD 🛡️ 』══❒
-┃║ ★┏━━━━━━『 BOT INFO 』━━━━━━
+┃━━━━━━━━━━━━━━━━━━━━━━━━❐
+┃╔══『CYBER ADVANCED MD』══❒
+┃║ ★┏━━━━『 BOT INFO 』━━━━━
 ┃║ ★│ ➣ ${toSmallCaps('BOT : STORM CYBER MD')}
 ┃║ ★│ ➣ ${toSmallCaps('VERSION : V3.0.0')}
 ┃║ ★│ ➣ ${toSmallCaps('DEV : STORM X')}
