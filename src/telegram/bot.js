@@ -26,7 +26,7 @@ const GROUP_LINK = 'https://t.me/+8XJN9NgIoPM1MmQ0'
 const CHANNEL_LINK = 'https://t.me/storm_cyber_md_channel'
 const OWNER_LINK = 'https://t.me/STORMXSYRIX'
 const CREATOR_LINK = 'https://t.me/STORMXSYRIX'
-const GROUP_ID = '-5524590300'
+const GROUP_ID = '-1004481999858'
 const CHANNEL_ID = '-1004422840019'
 
 const delay = (ms) => new Promise(r=>setTimeout(r,ms))
