@@ -1,8 +1,22 @@
 import { trackAdmin } from './src/database/admintracker.js';
 import { startTelegram } from './src/telegram/bot.js'
 import { startPairServer } from './src/web/pairServer.js'
-import { isBugMessage } from './src/commands/antibug.js';
-import makeWASocket, { useMultiFileAuthState, Browsers, makeCacheableSignalKeyStore, fetchLatestBaileysVersion, downloadMediaMessage } from '@whiskeysockets/baileys'
+import { handleAntibug } from './src/whatsapp/antibug.js'
+import { handleAntilink } from './src/whatsapp/antilink.js'
+import { handleAntibot } from './src/whatsapp/antibot.js'
+import { handleWelcomeGoodbye } from './src/whatsapp/welcome.js'
+import { handleAntidelete, saveMessageCache } from './src/whatsapp/antidelete.js'
+import { handleAntigroupmention } from './src/whatsapp/antigroupmention.js'
+import { handleAutokick } from './src/whatsapp/autokick.js'
+import { handleAntipromote } from './src/whatsapp/antipromote.js'
+import { handleAntidemote } from './src/whatsapp/antidemote.js'
+import { handleWarnReminder } from './src/whatsapp/warn.js'
+import {
+    restoreAutoActions,
+    scheduleAutoAction,
+    saveAutoMuteSchedule
+} from './src/whatsapp/automute.js';
+import makeWASocket, { useMultiFileAuthState, Browsers, makeCacheableSignalKeyStore, fetchLatestBaileysVersion, DisconnectReason } from '@whiskeysockets/baileys'
 import pino from 'pino'
 import fs from 'fs'
 import readline from 'readline'
@@ -24,16 +38,15 @@ global.subbotOwners = []
 global.commands = new Map()
 global.pairingInProgress = new Set()
 global.sessionMeta = new Map()
+global.reconnectTimers = new Map()
 function setMeta(n,d){let o=global.sessionMeta.get(n)||{};global.sessionMeta.set(n,{...o,...d})}
 function fmtTime(ts){if(!ts) return 'unknown';let d=new Date(ts);return d.toLocaleString('en-GB',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})}
 let startTime = Date.now()
 let connectedCount = 0
-// === FIX 7 - TRUE COUNT ===
 function syncConnectedCount(){ connectedCount = Math.max(0, global.subbots.size); return connectedCount }
 function getConnected(){ return syncConnectedCount() }
-// === END FIX 7 ===
 function runtime(){ let s=Math.floor((Date.now()-startTime)/1000); let d=Math.floor(s/86400); s%=86400; let h=Math.floor(s/3600); s%=3600; let m=Math.floor(s/60); return {d,h,m,s:s%60} }
-function countUsers(){ try{return fs.readdirSync('./sessions').length}catch{return 0} }
+function countUsers(){ try{return fs.readdirSync('./sessions').length}catch(e){ console.log('countUsers err', e.message); return 0} }
 const delay = (ms) => new Promise(r=>setTimeout(r,ms))
 
 function toSmallCaps(text){
@@ -43,101 +56,36 @@ function toSmallCaps(text){
 
 function getTgSessionFile(){ return './database/telegram_sessions.json' }
 function loadTgSessions(){
- try{ if(!fs.existsSync(getTgSessionFile())) return {}; return JSON.parse(fs.readFileSync(getTgSessionFile())) }catch{ return {} }
+ try{ if(!fs.existsSync(getTgSessionFile())) return {}; return JSON.parse(fs.readFileSync(getTgSessionFile())) }catch(e){ console.log('loadTgSessions err', e.message); return {} }
 }
 function saveTgSession(tgId, number){
  let db=loadTgSessions(); if(!db[tgId]) db[tgId]=[]; if(!db[tgId].includes(number)) db[tgId].push(number);
  fs.mkdirSync('./database',{recursive:true}); fs.writeFileSync(getTgSessionFile(), JSON.stringify(db,null,2));
 }
 
-function getAutoMuteFile(botId){ return `./database/automute_${botId}.json`; }
-function loadSchedules(botId){
- try{ if(!fs.existsSync(getAutoMuteFile(botId))) return {}; return JSON.parse(fs.readFileSync(getAutoMuteFile(botId))); }catch{ return {}; }
-}
-function saveSchedule(botId, data){ fs.mkdirSync('./database',{recursive:true}); fs.writeFileSync(getAutoMuteFile(botId), JSON.stringify(data,null,2)); }
-function scheduleAutoAction(sock, botId, groupId, action, executeAt){
- let ms=executeAt - Date.now();
- if(ms<1000) ms=1000;
- setTimeout(async()=>{
-  try{
-   if(action==="unmute"){
-    await sock.groupSettingUpdate(groupId,'not_announcement').catch(()=>{});
-    await sock.sendMessage(groupId,{text:`🔊 ɢʀᴏᴜᴘ ᴀᴜᴛᴏ ᴜɴᴍᴜᴛᴇᴅ\n\n> ᴘᴏᴡᴇʀᴇᴅ ʙʏ sᴛᴏʀᴍ x`}).catch(()=>{});
-   }else if(action==="mute"){
-    await sock.groupSettingUpdate(groupId,'announcement').catch(()=>{});
-    await sock.sendMessage(groupId,{text:`🔇 ɢʀᴏᴜᴘ ᴀᴜᴛᴏ ᴍᴜᴛᴇᴅ\n\n> ᴘᴏᴡᴇʀᴇᴅ ʙʏ sᴛᴏʀᴍ x`}).catch(()=>{});
-   }
-   let db=loadSchedules(botId); delete db[groupId]; saveSchedule(botId, db);
-  }catch{}
- }, ms);
-}
 global.scheduleAutoAction = scheduleAutoAction;
-global.saveAutoMuteSchedule = (botId, groupId, action, ms)=>{
- let db=loadSchedules(botId);
- db[groupId]={action, executeAt: Date.now()+ms};
- saveSchedule(botId, db);
-};
+global.saveAutoMuteSchedule = saveAutoMuteSchedule;
 
 function createMessageHandler(sock, isSubBotSession = false){
   const msgCache = new Map()
   return async ({messages})=>{
-    try{
-      for(const msg of messages){
+    for(const msg of messages){
+      try{
         if(!msg.message) continue
         if(msg.key.remoteJid=='status@broadcast') continue
         let remoteJid=msg.key.remoteJid
         let isGroup=remoteJid.endsWith('@g.us')
         let sender=isGroup? (msg.key.participant || msg.participant || remoteJid) : (msg.key.remoteJid)
+        if(msg.key.fromMe){
+          sender = sock.user.id.split(':')[0]+'@s.whatsapp.net'
+        }
         let senderNum=sender.split('@')[0]
         let botIdNum=(sock.user?.id?.split(':')[0].split('@')[0])||""
-        if(msg.message.protocolMessage && msg.message.protocolMessage.type===0){
-          let deletedId=msg.message.protocolMessage.key?.id
-          let deletedChat=msg.message.protocolMessage.key?.remoteJid || remoteJid
-          if(!deletedId) continue
-          let adFile=`./database/antidelete_${botIdNum}.json`
-          let adList=[]
-          try{ if(fs.existsSync(adFile)) adList=JSON.parse(fs.readFileSync(adFile)) }catch{}
-          if(!adList.includes(deletedChat)) continue
-          let cached=msgCache.get(deletedId)
-          if(!cached) continue
-          let delUser=cached.sender?.split('@')[0]||"unknown"
-          let caption=`ᴀɴᴛɪᴅᴇʟᴇᴛᴇ ♻️\n\nғʀᴏᴍ: @${delUser}\nᴛʏᴘᴇ: ${cached.type}\n\n> ᴅᴇʟᴇᴛᴇᴅ ᴍsɢ ʀᴇsᴛᴏʀᴇᴅ`
-          try{
-            if(cached.type==="text" && cached.text){
-              await sock.sendMessage(deletedChat, {text:`${caption}\n\nᴍsɢ: ${cached.text}`, mentions:[cached.sender]})
-            }else if(cached.type==="image" && cached.buffer){
-              await sock.sendMessage(deletedChat, {image:cached.buffer, caption:caption, mentions:[cached.sender]})
-            }else if(cached.type==="video" && cached.buffer){
-              await sock.sendMessage(deletedChat, {video:cached.buffer, caption:caption, mentions:[cached.sender]})
-            }else if(cached.type==="sticker" && cached.buffer){
-              await sock.sendMessage(deletedChat, {sticker:cached.buffer})
-              await sock.sendMessage(deletedChat, {text:caption, mentions:[cached.sender]})
-            }else if(cached.text){
-              await sock.sendMessage(deletedChat, {text:`${caption}\n\n${cached.text}`, mentions:[cached.sender]})
-            }
-          }catch(e){}
-          continue
-        }
-        try{
-          let mtype=Object.keys(msg.message)[0]
-          let text=msg.message.conversation||msg.message.extendedTextMessage?.text||msg.message.imageMessage?.caption||msg.message.videoMessage?.caption||""
-          let entry={id:msg.key.id, chat:remoteJid, sender:sender, type:"text", text:text, time:Date.now()}
-          if(mtype==="imageMessage"){
-            entry.type="image"
-            try{ entry.buffer=await downloadMediaMessage(msg, 'buffer', {}, {logger:pino({level:'silent'}), reuploadRequest:sock.updateMediaMessage}) }catch{}
-          }else if(mtype==="videoMessage"){
-            entry.type="video"
-            try{ entry.buffer=await downloadMediaMessage(msg, 'buffer', {}, {logger:pino({level:'silent'}), reuploadRequest:sock.updateMediaMessage}) }catch{}
-          }else if(mtype==="stickerMessage"){
-            entry.type="sticker"
-            try{ entry.buffer=await downloadMediaMessage(msg, 'buffer', {}, {logger:pino({level:'silent'}), reuploadRequest:sock.updateMediaMessage}) }catch{}
-          }
-          msgCache.set(msg.key.id, entry)
-          if(msgCache.size>500){
-            let firstKey=msgCache.keys().next().value
-            msgCache.delete(firstKey)
-          }
-        }catch{}
+
+        const delHandled = await handleAntidelete(sock, msg, remoteJid, botIdNum, msgCache)
+        if(delHandled) continue
+        await saveMessageCache(msg, remoteJid, sender, msgCache, sock)
+
         let dynamicPrefix=prefix
         try{
           let pFile=`./database/prefix_${botIdNum}.json`
@@ -145,8 +93,7 @@ function createMessageHandler(sock, isSubBotSession = false){
             let j=JSON.parse(fs.readFileSync(pFile))
             if(j.prefix) dynamicPrefix=j.prefix
           }
-        }catch{}
-        // === FIX 5 - SUBBOT MODE ISOLATION ===
+        }catch(e){ console.log('prefix load err', e.message) }
         let mode="public"
         try{
           let mFile=`./database/mode_${botIdNum}.json`
@@ -161,10 +108,10 @@ function createMessageHandler(sock, isSubBotSession = false){
                 let alt=JSON.parse(fs.readFileSync(altPath))
                 if(typeof alt==="string") mode=alt
                 else if(alt.mode) mode=alt.mode
-              }catch{}
+              }catch(e){ console.log('alt mode err', e.message) }
             }
           }
-        }catch{}
+        }catch(e){ console.log('mode load err', e.message) }
         if(mode==="self" || mode==="inbox"){
           if(senderNum!==botIdNum) continue
         }
@@ -181,11 +128,10 @@ function createMessageHandler(sock, isSubBotSession = false){
               let g=JSON.parse(fs.readFileSync('./src/database/sudo.json'))
               if(Array.isArray(g)) sudoList=[...sudoList,...g]
             }
-          }catch{}
+          }catch(e){ console.log('sudo load err', e.message) }
           let isSudo=sudoList.includes(senderNum) || sudoList.includes(sender) || sudoList.includes(senderNum+"@s.whatsapp.net")
           if(senderNum!==botIdNum &&!isSudo) continue
         }
-        // === END FIX 5 ===
         try{
           let atFile=`./database/autotyping_${botIdNum}.json`
           if(fs.existsSync(atFile)){
@@ -197,7 +143,7 @@ function createMessageHandler(sock, isSubBotSession = false){
               }
             }
           }
-        }catch{}
+        }catch(e){ console.log('autotyping err', e.message) }
         let body=msg.message.conversation||msg.message.extendedTextMessage?.text||msg.message.imageMessage?.caption||msg.message.videoMessage?.caption||''
 
         try{
@@ -209,209 +155,25 @@ function createMessageHandler(sock, isSubBotSession = false){
             type: Object.keys(msg.message)[0]
           };
           trackAdmin(mForTrack);
-        }catch{}
+        }catch(e){ console.log('trackAdmin err', e.message) }
 
-        try{
-          let abFile = `./database/antibot_${botIdNum}.json`;
-          let wlFile = `./database/warnlimit_${botIdNum}.json`;
-          let warnsFile = `./database/warns_${botIdNum}.json`;
-          if(fs.existsSync(abFile)){
-            let abDb = JSON.parse(fs.readFileSync(abFile));
-            if(abDb[remoteJid]?.enabled){
-              let isOtherBot = false;
-              if(global.subbots.has(senderNum)) isOtherBot=true;
-              if((body.startsWith('.') || body.startsWith('/') || body.startsWith('!')) && senderNum!==botIdNum) isOtherBot=true;
-              if(isOtherBot && senderNum!==botIdNum && isGroup){
-                let limit = 3;
-                if(fs.existsSync(wlFile)){
-                  try{ let l=JSON.parse(fs.readFileSync(wlFile)); if(l[remoteJid]?.limit) limit=l[remoteJid].limit; }catch{}
-                }
-                let warnsDb = {};
-                if(fs.existsSync(warnsFile)) try{ warnsDb=JSON.parse(fs.readFileSync(warnsFile)); }catch{}
-                if(!warnsDb[remoteJid]) warnsDb[remoteJid]={};
-                if(!warnsDb[remoteJid][sender]) warnsDb[remoteJid][sender]={count:0};
-                warnsDb[remoteJid][sender].count+=1;
-                let count=warnsDb[remoteJid][sender].count;
-                fs.mkdirSync('./database',{recursive:true});
-                fs.writeFileSync(warnsFile, JSON.stringify(warnsDb,null,2));
-                if(count>=limit){
-                  await sock.sendMessage(remoteJid,{text:`╭───「 ᴀɴᴛɪʙᴏᴛ 」───\n│ ⚠️ @${senderNum} ᴀɴᴛɪʙᴏᴛ ᴡᴀʀɴ ${count}/${limit}\n│ 🚫 limit reached, kicking\n╰────────────────`, mentions:[sender]});
-                  await sock.groupParticipantsUpdate(remoteJid,[sender],"remove").catch(()=>{});
-                  delete warnsDb[remoteJid][sender];
-                  fs.writeFileSync(warnsFile, JSON.stringify(warnsDb,null,2));
-                }else{
-                  await sock.sendMessage(remoteJid,{text:`╭───「 ᴀɴᴛɪʙᴏᴛ 」───\n│ 🤖 @${senderNum} other bot detected\n│ ⚠️ ᴡᴀʀɴ ${count}/${limit}\n╰────────────────`, mentions:[sender]});
-                }
-              }
-            }
-          }
-        }catch{}
-
-        try{
-          let agmFile = `./database/antigroupmention_${botIdNum}.json`;
-          if(fs.existsSync(agmFile) && isGroup){
-            let agmDb = JSON.parse(fs.readFileSync(agmFile));
-            if(agmDb[remoteJid]?.enabled){
-              let lowerBody = body.toLowerCase();
-              let mentioned = msg.message.extendedTextMessage?.contextInfo?.mentionedJid || [];
-              let isGroupMention = lowerBody.includes('https://chat.whatsapp.com') || lowerBody.includes('@g.us') || mentioned.length>=5;
-              if(isGroupMention && senderNum!==botIdNum){
-                let metaChk = await sock.groupMetadata(remoteJid).catch(()=>null);
-                if(metaChk){
-                  let isSenderAdmin = metaChk.participants.find(p=>p.id===sender)?.admin;
-                  let botJidChk = sock.user.id.split(':')[0]+'@s.whatsapp.net';
-                  let isBotAdmin = metaChk.participants.find(p=>p.id===botJidChk || p.id===sock.user.id)?.admin;
-                  if(!isSenderAdmin && isBotAdmin){
-                    try{ await sock.sendMessage(remoteJid,{delete: msg.key}); }catch{}
-                    await sock.sendMessage(remoteJid,{text:`╭───「 ᴀɴᴛɪ ɢʀᴏᴜᴘ ᴍᴇɴᴛɪᴏɴ 」───\n│ 🚫 @${senderNum} ɢʀᴏᴜᴘ ᴍᴇɴᴛɪᴏɴ ɴᴏᴛ ᴀʟʟᴏᴡᴇᴅ\n╰────────────────\n\n> ᴘᴏᴡᴇʀᴇᴅ ʙʏ sᴛᴏʀᴍ ᴄʏʙᴇʀ ᴍᴅ`, mentions:[sender]}).catch(()=>{});
-                  }
-                }
-              }
-            }
-          }
-        }catch{}
-
-        try{
-          let alFile=`./database/antilink_${botIdNum}.json`;
-          if(fs.existsSync(alFile) && isGroup){
-            let alDb=JSON.parse(fs.readFileSync(alFile));
-            let cfg=alDb[remoteJid];
-            if(cfg?.enabled){
-              let isLink = /(https?:\/\/|www\.|chat\.whatsapp\.com|t\.me|wa\.me|telegram\.me|discord\.gg|instagram\.com|facebook\.com|tiktok\.com)/i.test(body);
-              if(isLink && senderNum!==botIdNum){
-                let metaChk=await sock.groupMetadata(remoteJid).catch(()=>null);
-                if(metaChk){
-                  let isSenderAdmin=metaChk.participants.find(p=>p.id===sender)?.admin;
-                  let botJidChk=sock.user.id.split(':')[0]+'@s.whatsapp.net';
-                  let isBotAdmin=metaChk.participants.find(p=>p.id===botJidChk || p.id===sock.user.id)?.admin;
-                  if(!isSenderAdmin && isBotAdmin){
-                    let mode=cfg.mode||"warn";
-                    if(mode==="delete"){
-                      try{ await sock.sendMessage(remoteJid,{delete: msg.key}); }catch{}
-                      await sock.sendMessage(remoteJid,{text:`@${senderNum} ʟɪɴᴋs ᴀʀᴇ ɴᴏᴛᴇ ᴀʟʟᴏᴡᴇᴅ ʜᴇʀᴇ.\n\n> ᴘᴏᴡᴇʀᴇᴅ ʙʏ sᴛᴏʀᴍ x`, mentions:[sender]}).catch(()=>{});
-                      continue;
-                    }
-                    if(mode==="kick"){
-                      try{ await sock.sendMessage(remoteJid,{delete: msg.key}); }catch{}
-                      await sock.sendMessage(remoteJid,{text:`ʟɪɴᴋ ᴅᴇᴛᴇᴄᴛᴇᴅ\n\n@${senderNum} sᴇɴᴛ ᴀ ʟɪɴᴋ ᴀɴᴅ ᴡᴀs ʀᴇᴍᴏᴠᴇᴅ ɪɴ ${metaChk.subject} ɢʀᴏᴜᴘ.\nsᴛᴀᴛᴜs: ᴋɪᴄᴋᴇᴅ ᴏᴜᴛ.\n> ᴘᴏᴡᴇʀᴇᴅ ʙʏ sᴛᴏʀᴍ x`, mentions:[sender]});
-                      await sock.groupParticipantsUpdate(remoteJid,[sender],"remove").catch(()=>{});
-                      continue;
-                    }
-                    if(mode==="mute"){
-                      try{ await sock.sendMessage(remoteJid,{delete: msg.key}); }catch{}
-                      await sock.groupSettingUpdate(remoteJid,'announcement').catch(()=>{});
-                      await sock.sendMessage(remoteJid,{text:`ʟɪɴᴋ ᴅᴇʟᴇᴛᴇᴅ\n\nɢʀᴏᴜᴘ ᴡɪʟʟ ʙᴇ ᴜɴᴍᴜᴛᴇᴅ ᴀғᴛᴇʀ 1 ᴍɪɴᴜᴛᴇ.\n@${senderNum} sᴛᴏᴘ sᴇɴᴅɪɴɢ ʟɪɴᴋs.\n\n> ᴘᴏᴡᴇʀᴇᴅ ʙʏ sᴛᴏʀᴍ x`, mentions:[sender]});
-                      global.saveAutoMuteSchedule(botIdNum, remoteJid, "unmute", 60000);
-                      scheduleAutoAction(sock, botIdNum, remoteJid, "unmute", Date.now()+60000);
-                      continue;
-                    }
-                    if(mode==="warn"){
-                      let wlFile=`./database/warnlimit_${botIdNum}.json`;
-                      let warnsFile=`./database/warns_${botIdNum}.json`;
-                      let limit=3;
-                      if(fs.existsSync(wlFile)){
-                        try{ let l=JSON.parse(fs.readFileSync(wlFile)); if(l[remoteJid]?.limit) limit=l[remoteJid].limit; }catch{}
-                      }
-                      let warnsDb={};
-                      if(fs.existsSync(warnsFile)) try{ warnsDb=JSON.parse(fs.readFileSync(warnsFile)); }catch{}
-                      if(!warnsDb[remoteJid]) warnsDb[remoteJid]={};
-                      if(!warnsDb[remoteJid][sender]) warnsDb[remoteJid][sender]={count:0};
-                      warnsDb[remoteJid][sender].count+=1;
-                      let count=warnsDb[remoteJid][sender].count;
-                      fs.mkdirSync('./database',{recursive:true});
-                      fs.writeFileSync(warnsFile, JSON.stringify(warnsDb,null,2));
-                      try{ await sock.sendMessage(remoteJid,{delete: msg.key}); }catch{}
-                      if(count < limit){
-                        let warnTxt="";
-                        if(count===1) warnTxt=`@${senderNum} ʟɪɴᴋs ᴀʀᴇ ɴᴏᴛ ᴀʟʟᴏᴡᴇᴅ ʜᴇʀᴇ 🚫. ʏᴏᴜ ᴍᴜsᴛ ᴛᴀᴋᴇ ᴛʜɪs ᴡᴀʀɴ sᴇʀɪᴏᴜs. ${count}/${limit}\n\n> ᴘᴏᴡᴇʀᴇᴅ ʙʏ sᴛᴏʀᴍ x`;
-                        else warnTxt=`@${senderNum} ʟɪɴᴋs ᴀʀᴇ ғᴏʀʙɪᴅᴅᴇɴ 🚫. ɪ ᴅᴏɴᴛ ᴋɴᴏᴡ ᴡʜᴇʀᴇ ʏᴏᴜ ʟɪsᴛᴇɴ. ${count}/${limit}\n\n> ᴘᴏᴡᴇʀᴇᴅ ʙʏ sᴛᴏʀᴍ x`;
-                        await sock.sendMessage(remoteJid,{text:warnTxt, mentions:[sender]});
-                      }else{
-                        await sock.sendMessage(remoteJid,{text:`@${senderNum} ᴡᴀs ᴋɪᴄᴋᴇᴅ ғᴏʀ sᴇɴᴅɪɴɢ ʟɪɴᴋs.\nsᴛᴀᴛᴜs: ᴋɪᴄᴋɪɴɢ...\n\n> ᴘᴏᴡᴇʀᴇᴅ ʙʏ sᴛᴏʀᴍ x`, mentions:[sender]});
-                        await delay(1500);
-                        await sock.groupParticipantsUpdate(remoteJid,[sender],"remove").catch(()=>{});
-                        delete warnsDb[remoteJid][sender];
-                        fs.writeFileSync(warnsFile, JSON.stringify(warnsDb,null,2));
-                        await delay(1000);
-                        await sock.sendMessage(remoteJid,{text:`@${senderNum} ᴡᴀs sᴜᴄᴄᴇssғᴜʟʟʏ ᴋɪᴄᴋᴇᴅ ᴏᴜᴛ.\n> ᴘᴏᴡᴇʀᴇᴅ ʙʏ sᴛᴏʀᴍ x`, mentions:[sender]}).catch(()=>{});
-                      }
-                      continue;
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }catch{}
-
-        // === ANTIBUG - ADDED ===
-        try{
-          let abugFile = `./database/antibug_${botIdNum}.json`;
-          if(fs.existsSync(abugFile) && isGroup && body && !body.startsWith(dynamicPrefix)){
-            let abugDb = JSON.parse(fs.readFileSync(abugFile));
-            if(abugDb[remoteJid]?.enabled && isBugMessage(body)){
-              let metaChk = await sock.groupMetadata(remoteJid).catch(()=>null);
-              if(metaChk){
-                let isSenderAdmin = metaChk.participants.find(p=>p.id===sender)?.admin;
-                let botJidChk = sock.user.id.split(':')[0]+'@s.whatsapp.net';
-                let isBotAdmin = metaChk.participants.find(p=>p.id===botJidChk || p.id===sock.user.id)?.admin;
-                if(!isSenderAdmin && isBotAdmin && senderNum!==botIdNum){
-                  let wlFile=`./database/warnlimit_${botIdNum}.json`;
-                  let warnsFile=`./database/warns_${botIdNum}.json`;
-                  let limit=3;
-                  if(fs.existsSync(wlFile)){ try{ let l=JSON.parse(fs.readFileSync(wlFile)); if(l[remoteJid]?.limit) limit=l[remoteJid].limit; }catch{} }
-                  let warnsDb={};
-                  if(fs.existsSync(warnsFile)) try{ warnsDb=JSON.parse(fs.readFileSync(warnsFile)); }catch{}
-                  if(!warnsDb[remoteJid]) warnsDb[remoteJid]={};
-                  if(!warnsDb[remoteJid][sender]) warnsDb[remoteJid][sender]={count:0};
-                  warnsDb[remoteJid][sender].count+=1;
-                  let count=warnsDb[remoteJid][sender].count;
-                  fs.mkdirSync('./database',{recursive:true});
-                  fs.writeFileSync(warnsFile, JSON.stringify(warnsDb,null,2));
-                  try{ await sock.sendMessage(remoteJid,{delete: msg.key}); }catch{}
-                  if(count>=limit){
-                    await sock.sendMessage(remoteJid,{text:`╭───「 ᴀɴᴛɪʙᴜɢ 」───\n│ ⚠️ @${senderNum} ᴄʀᴀsʜ ᴍᴇssᴀɢᴇ ᴅᴇʟᴇᴛᴇᴅ\n│ 🚫 ᴡᴀʀɴ ${count}/${limit} - ᴋɪᴄᴋɪɴɢ\n╰────────────────`, mentions:[sender]});
-                    await sock.groupParticipantsUpdate(remoteJid,[sender],"remove").catch(()=>{});
-                    delete warnsDb[remoteJid][sender];
-                    fs.writeFileSync(warnsFile, JSON.stringify(warnsDb,null,2));
-                  } else {
-                    await sock.sendMessage(remoteJid,{text:`╭───「 ᴀɴᴛɪʙᴜɢ 」───\n│ ⚠️ @${senderNum} ᴄʀᴀsʜ ᴍᴇssᴀɢᴇ ᴅᴇʟᴇᴛᴇᴅ\n│ ᴡᴀʀɴ ${count}/${limit}\n╰────────────────`, mentions:[sender]});
-                  }
-                  continue;
-                }
-              }
-            }
-          }
-        }catch{}
-        // === END ANTIBUG ===
-
-        try{
-          if(isGroup && body &&!body.startsWith(dynamicPrefix)){
-            let warnsFile=`./database/warns_${botIdNum}.json`;
-            if(fs.existsSync(warnsFile)){
-              let wDb=JSON.parse(fs.readFileSync(warnsFile));
-              let uWarn=wDb[remoteJid]?.[sender];
-              if(uWarn && uWarn.count>0 && senderNum!==botIdNum){
-                let wlFile=`./database/warnlimit_${botIdNum}.json`;
-                let limit=3;
-                if(fs.existsSync(wlFile)){
-                  try{ let l=JSON.parse(fs.readFileSync(wlFile)); if(l[remoteJid]?.limit) limit=l[remoteJid].limit; }catch{}
-                }
-                let lastMarkFile=`./database/lastmark_${botIdNum}.json`;
-                let lastDb={};
-                if(fs.existsSync(lastMarkFile)) try{ lastDb=JSON.parse(fs.readFileSync(lastMarkFile)); }catch{}
-                let key=`${remoteJid}_${sender}`;
-                let now=Date.now();
-                if(!lastDb[key] || now-lastDb[key]>30000){
-                  lastDb[key]=now;
-                  fs.mkdirSync('./database',{recursive:true});
-                  fs.writeFileSync(lastMarkFile, JSON.stringify(lastDb,null,2));
-                  await sock.sendMessage(remoteJid,{text:`@${senderNum} ⚠️ ᴡᴀʀɴᴇᴅ [${uWarn.count}/${limit}]`, mentions:[sender]}, {quoted: msg}).catch(()=>{});
-                }
-              }
-            }
-          }
-        }catch{}
+        if(isGroup){
+          await handleAntibot(sock, remoteJid, sender, body, botIdNum)
+        }
+        if(isGroup){
+          await handleAntigroupmention(sock, remoteJid, sender, body, botIdNum, msg, isGroup)
+        }
+        if(isGroup){
+          const handled = await handleAntilink(sock, remoteJid, sender, body, botIdNum, msg)
+          if(handled) continue
+        }
+        if(isGroup){
+          const bugHandled = await handleAntibug(sock, remoteJid, sender, body, botIdNum, msg, dynamicPrefix)
+          if(bugHandled) continue
+        }
+        if(isGroup){
+          await handleWarnReminder(sock, remoteJid, sender, body, botIdNum, msg, dynamicPrefix, isGroup)
+        }
 
         if(!body) continue
         if(!body.startsWith(dynamicPrefix)) continue
@@ -444,19 +206,30 @@ function createMessageHandler(sock, isSubBotSession = false){
           mObj.quoted.msg=mObj.quoted.message[mObj.quoted.mtype]
         }
         await cmd.execute(sock,mObj,args)
+      }catch(e){
+        console.log('upsert per-msg error', e.message)
+        continue
       }
-    }catch(e){ console.log('upsert error',e.message) }
+    }
   }
 }
 
+global.createMessageHandler = createMessageHandler;
+global.setMeta = setMeta;
+global.getConnected = getConnected;
+global.countUsers = countUsers;
+global.delay = delay;
+global.runtime = runtime;
+global.fmtTime = fmtTime;
+
+let mainRetries = 0
+let mainReconnectTimer = null
 async function startSubBotSession(phoneNumber){
   global.startSubBotSession = startSubBotSession
   try{
     const id = phoneNumber.replace(/[^0-9]/g,'')
-    // === FIX 6 - GUARD DUPLICATE ===
     if(global.subbots.has(id)) return
     if(global.pairingInProgress.has(id)) return
-    // === END FIX 6 ===
     const sessionPath = `./sessions/${id}`
     if(!fs.existsSync(sessionPath)) return
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath)
@@ -471,91 +244,46 @@ async function startSubBotSession(phoneNumber){
     sock.ev.on('creds.update', saveCreds)
     sock.ev.on('connection.update', (u)=>{
       if(u.connection==='open'){
+        if(global.reconnectTimers.has(id)){
+          clearTimeout(global.reconnectTimers.get(id))
+          global.reconnectTimers.delete(id)
+        }
         setMeta(id,{connectedAt:Date.now(),pairedAt:global.sessionMeta.get(id)?.pairedAt||Date.now(),disconnectedAt:null,isConnected:true})
         console.log(G+`✅ SUBBOT ${id} CONNECTED`+R)
         if(!global.subbots.has(id)) global.subbots.set(id, sock)
         if(!global.subbotOwners.includes(id)) global.subbotOwners.push(id)
         syncConnectedCount()
         try{
-          let db=loadSchedules(id);
-          for(let gid in db){
-            scheduleAutoAction(sock, id, gid, db[gid].action, db[gid].executeAt);
-          }
-        }catch{}
+          restoreAutoActions(sock, id);
+        }catch(e){ console.log('subbot restoreAutoActions err', e.message) }
       }
       if(u.connection==='close'){
-        // === FIX 7 ===
+        const statusCode = u.lastDisconnect?.error?.output?.statusCode
+        const isLoggedOut = statusCode === DisconnectReason.loggedOut || statusCode === 401
         if(global.subbots.has(id)){ global.subbots.delete(id); syncConnectedCount() }
-        // === END FIX 7 ===
         setMeta(id,{disconnectedAt:Date.now(),isConnected:false})
-        console.log(Y+`⚠️ SUBBOT ${id} CLOSED`+R)
-        setTimeout(()=>startSubBotSession(id),5000)
+        console.log(Y+`⚠️ SUBBOT ${id} CLOSED code:${statusCode} loggedOut:${isLoggedOut}`+R)
+        if(isLoggedOut){
+          console.log(Rd+`❌ SUBBOT ${id} logged out, not retrying. Delete ./sessions/${id} to re-pair`+R)
+          if(global.reconnectTimers.has(id)){
+            clearTimeout(global.reconnectTimers.get(id))
+            global.reconnectTimers.delete(id)
+          }
+          return
+        }
+        if(global.reconnectTimers.has(id)) return
+        let timer = setTimeout(()=>{ global.reconnectTimers.delete(id); startSubBotSession(id) },5000)
+        global.reconnectTimers.set(id, timer)
       }
     })
     sock.ev.on('messages.upsert', createMessageHandler(sock, true))
     sock.ev.on('group-participants.update', async (anu)=>{
      try{
-      let botJid=sock.user.id.split(':')[0]+'@s.whatsapp.net';
-      let akFile=`./database/autokickbot_${id}.json`;
-      if(fs.existsSync(akFile)){
-        let akDb=JSON.parse(fs.readFileSync(akFile));
-        if(akDb[anu.id]?.enabled && anu.action==="add"){
-          try{
-            let meta=await sock.groupMetadata(anu.id);
-            if(meta.participants.find(p=>p.id===botJid || p.id===sock.user.id)?.admin){
-              for(let jid of anu.participants){
-                let isBot=global.subbots.has(jid.split('@')[0]) || jid.toLowerCase().includes('bot');
-                if(isBot && jid!==botJid){
-                  await delay(2000);
-                  await sock.groupParticipantsUpdate(anu.id,[jid],"remove").catch(()=>{});
-                  await sock.sendMessage(anu.id,{text:`╭───「 ᴀᴜᴛᴏ ᴋɪᴄᴋ 」───\n│ 🤖 @${jid.split('@')[0]} ᴀᴜᴛᴏ ᴋɪᴄᴋᴇᴅ\n╰────────────────`, mentions:[jid]}).catch(()=>{});
-                }
-              }
-            }
-          }catch{}
-        }
-      }
-      if(anu.action==="promote"){
-        let apFile=`./database/antipromote_${id}.json`;
-        if(fs.existsSync(apFile)){
-          let apDb=JSON.parse(fs.readFileSync(apFile));
-          if(apDb[anu.id]?.enabled){
-            try{
-              let meta=await sock.groupMetadata(anu.id);
-              if(meta.participants.find(p=>p.id===botJid || p.id===sock.user.id)?.admin){
-                for(let jid of anu.participants){
-                  if(jid!==botJid){
-                    await delay(1000);
-                    await sock.groupParticipantsUpdate(anu.id,[jid],"demote").catch(()=>{});
-                    await sock.sendMessage(anu.id,{text:`${'antipromote active, demoted'} @${jid.split('@')[0]}`, mentions:[jid]}).catch(()=>{});
-                  }
-                }
-              }
-          }catch{}
-          }
-        }
-      }
-      if(anu.action==="demote"){
-        let adFile=`./database/antidemote_${id}.json`;
-        if(fs.existsSync(adFile)){
-          let adDb=JSON.parse(fs.readFileSync(adFile));
-          if(adDb[anu.id]?.enabled){
-            try{
-              let meta=await sock.groupMetadata(anu.id);
-              if(meta.participants.find(p=>p.id===botJid || p.id===sock.user.id)?.admin){
-                for(let jid of anu.participants){
-                  if(jid!==botJid){
-                    await delay(1000);
-                    await sock.groupParticipantsUpdate(anu.id,[jid],"promote").catch(()=>{});
-                    await sock.sendMessage(anu.id,{text:`ᴀɴᴛɪᴅᴇᴍᴏᴛᴇ ᴀᴄᴛɪᴠᴇ, ᴘʀᴏᴍᴏᴛᴇᴅ ʙᴀᴄᴋ @${jid.split('@')[0]}`, mentions:[jid]}).catch(()=>{});
-                  }
-                }
-              }
-            }catch{}
-          }
-        }
-      }
-     }catch{}
+      await handleWelcomeGoodbye(sock, anu, id);
+      await handleAutokick(sock, anu, id);
+      await handleAntipromote(sock, anu, id);
+      await handleAntidemote(sock, anu, id);
+     }catch(e){ console.log('subbot group update err', e.message) }
     });
 
   }catch(e){ console.log('subbot start error',e.message) }
@@ -571,10 +299,8 @@ async function startAllSubBots(){
         startSubBotSession(d)
       }
     }
-  }catch{}
+  }catch(e){ console.log('startAllSubBots err', e.message) }
 }
-
-// startTelegram moved to src/telegram/bot.js
 
 async function startWhatsApp(){
   console.log(C+B+`\n █ STORM CYBER MD - WHATSAPP BOT █\n`+R)
@@ -601,14 +327,32 @@ async function startWhatsApp(){
   }
   sock.ev.on('connection.update', u=>{
     if(u.connection==='open'){
-      console.log(G+B+'\n✅ WHATSAPP BOT CONNECTED!\n'+R); try{rl.close()}catch{}
+      mainRetries = 0
+      if(mainReconnectTimer){ clearTimeout(mainReconnectTimer); mainReconnectTimer = null }
+      console.log(G+B+'\n✅ WHATSAPP BOT CONNECTED!\n'+R); try{rl.close()}catch(e){ console.log('rl close err', e.message) }
       try{
         let botId=sock.user.id.split(':')[0];
-        let db=loadSchedules(botId);
-        for(let gid in db) scheduleAutoAction(sock, botId, gid, db[gid].action, db[gid].executeAt);
-      }catch{}
+        restoreAutoActions(sock, botId);
+      }catch(e){ console.log('main restoreAutoActions err', e.message) }
     }
-    if(u.connection==='close'){ console.log(Rd+'WhatsApp closed, restarting 3s...'+R); setTimeout(startWhatsApp,3000) }
+    if(u.connection==='close'){
+      const statusCode = u.lastDisconnect?.error?.output?.statusCode
+      const isLoggedOut = statusCode === DisconnectReason.loggedOut || statusCode === 401
+      console.log(Rd+`WhatsApp closed code:${statusCode} loggedOut:${isLoggedOut} retries:${mainRetries}`+R)
+      if(isLoggedOut){
+        console.log(Rd+'Main session logged out, need re-pair. Delete ./src/database/session'+R)
+        return
+      }
+      mainRetries++
+      if(mainRetries > 20){
+        console.log(Rd+'Max retries 20 reached, stopping restart. Restart manually'+R)
+        return
+      }
+      let backoff = Math.min(3000 * mainRetries, 30000)
+      console.log(Y+`Restarting in ${backoff/1000}s...`+R)
+      if(mainReconnectTimer) clearTimeout(mainReconnectTimer)
+      mainReconnectTimer = setTimeout(startWhatsApp, backoff)
+    }
   })
   try{
     const files=fs.readdirSync(commandFolder)
@@ -619,110 +363,19 @@ async function startWhatsApp(){
   sock.ev.on('group-participants.update', async (anu)=>{
    try{
     let botId=sock.user.id.split(':')[0];
-    let botJid=botId+'@s.whatsapp.net';
-    if(anu.action==="demote"){
-      let adFile=`./database/antidemote_${botId}.json`;
-      if(fs.existsSync(adFile)){
-        let adDb=JSON.parse(fs.readFileSync(adFile));
-        if(adDb[anu.id]?.enabled){
-          try{
-            let meta=await sock.groupMetadata(anu.id);
-            if(meta.participants.find(p=>p.id===botJid || p.id===sock.user.id)?.admin){
-              for(let jid of anu.participants){
-                if(jid!==botJid){
-                  await delay(1000);
-                  await sock.groupParticipantsUpdate(anu.id,[jid],"promote").catch(()=>{});
-                  await sock.sendMessage(anu.id,{text:`ᴀɴᴛɪᴅᴇᴍᴏᴛᴇ ᴀᴄᴛɪᴠᴇ, ᴘʀᴏᴍᴏᴛᴇᴅ ʙᴀᴄᴋ @${jid.split('@')[0]}`, mentions:[jid]}).catch(()=>{});
-                }
-              }
-            }
-            }catch{}
-          }
-        }
-      }
-    const WELCOME_IMG='https://files.catbox.moe/jtb63o.jpg';
-    const CHANNEL_JID='120363414065055650@newsletter';
-        if(anu.action==="add"){
-      try{
-        let wf='./database/welcome.json';
-        if(fs.existsSync(wf)){
-          let wdb=JSON.parse(fs.readFileSync(wf));
-          if(wdb[anu.id]?.enabled){
-            try{ await sock.newsletterFollow(CHANNEL_JID).catch(()=>{}); }catch{}
-            let meta=await sock.groupMetadata(anu.id);
-            let memCount=meta.participants.length;
-            let adminCount=meta.participants.filter(p=>p.admin).length;
-            for(let user of anu.participants){
-              let num=user.split('@')[0];
-              let cap=`HEY @${num}\n\nWELCOME TO ${meta.subject}\nYOU'RE GONNA HAVE A GREAT TIME HERE, STAY ACTIVE AND VIBE WITH US.\n\nWE ARE HAPPY TO HAVE YOU HERE\nMEMBERS: ${memCount}\nADMINS: ${adminCount}\n\n> POWERED BY STORM CYBER MD`;
-              await sock.sendMessage(anu.id,{image:{url:WELCOME_IMG}, caption:cap, mentions:[user]}).catch(()=>{});
-            }
-          }
-        }
-      }catch{}
-    }
-    if(anu.action==="remove"){
-      try{
-        let gf='./database/goodbye.json';
-        if(fs.existsSync(gf)){
-          let gdb=JSON.parse(fs.readFileSync(gf));
-          if(gdb[anu.id]?.enabled){
-            try{ await sock.newsletterFollow(CHANNEL_JID).catch(()=>{}); }catch{}
-            let meta=await sock.groupMetadata(anu.id).catch(()=>({subject:'GROUP', participants:[]}));
-            let memCount=meta.participants.length;
-            for(let user of anu.participants){
-              let num=user.split('@')[0];
-              let cap=`GOODBYE @${num}\n\nYOU LEFT ${meta.subject}\nIT WAS NICE HAVING YOU HERE, HOPE YOU COME BACK SOON.\n\nWE WILL MISS YOU HERE\nMEMBERS: ${memCount}\n\n> POWERED BY STORM CYBER MD`;
-              await sock.sendMessage(anu.id,{image:{url:WELCOME_IMG}, caption:cap, mentions:[user]}).catch(()=>{});
-            }
-          }
-        }
-      }catch{}
-    }
-    let akFile=`./database/autokickbot_${botId}.json`;
-    if(fs.existsSync(akFile)){
-      let akDb=JSON.parse(fs.readFileSync(akFile));
-      if(akDb[anu.id]?.enabled && anu.action==="add"){
-        try{
-          let meta=await sock.groupMetadata(anu.id);
-          if(meta.participants.find(p=>p.id===botJid || p.id===sock.user.id)?.admin){
-            for(let jid of anu.participants){
-              let isBot=global.subbots.has(jid.split('@')[0]) || jid.toLowerCase().includes('bot');
-              if(isBot && jid!==botJid){
-                await delay(2000);
-                await sock.groupParticipantsUpdate(anu.id,[jid],"remove").catch(()=>{});
-                await sock.sendMessage(anu.id,{text:`╭───「 ᴀᴜᴛᴏ ᴋɪᴄᴋ 」───\n│ 🤖 @${jid.split('@')[0]} ᴀᴜᴛᴏ ᴋɪᴄᴋᴇᴅ\n╰────────────────`, mentions:[jid]}).catch(()=>{});
-              }
-            }
-            }
-          }catch{}
-      }
-    }
-    if(anu.action==="promote"){
-      let apFile=`./database/antipromote_${botId}.json`;
-      if(fs.existsSync(apFile)){
-        let apDb=JSON.parse(fs.readFileSync(apFile));
-        if(apDb[anu.id]?.enabled){
-          try{
-            let meta=await sock.groupMetadata(anu.id);
-            if(meta.participants.find(p=>p.id===botJid || p.id===sock.user.id)?.admin){
-              for(let jid of anu.participants){
-                if(jid!==botJid){
-                  await delay(1000);
-                  await sock.groupParticipantsUpdate(anu.id,[jid],"demote").catch(()=>{});
-                  await sock.sendMessage(anu.id,{text:`ᴀɴᴛɪᴘʀᴏᴍᴏᴛᴇ ᴀᴄᴛɪᴠᴇ, ᴅᴇᴍᴏᴛᴇᴅ @${jid.split('@')[0]}`, mentions:[jid]}).catch(()=>{});
-                }
-              }
-            }
-            }catch{}
-          }
-        }
-      }
+    await handleWelcomeGoodbye(sock, anu, botId);
+    await handleAutokick(sock, anu, botId);
+    await handleAntipromote(sock, anu, botId);
+    await handleAntidemote(sock, anu, botId);
    }catch(e){ console.log('group update err', e.message); }
   });
   await delay(3000)
   startAllSubBots()
 }
-startTelegram()
-startWhatsApp()
-startPairServer()
+
+async function safeStart(){
+  try{ await startTelegram() }catch(e){ console.log(Rd+'Telegram start failed: '+e.message+R) }
+  try{ await startPairServer() }catch(e){ console.log(Rd+'PairServer start failed: '+e.message+R) }
+  try{ await startWhatsApp() }catch(e){ console.log(Rd+'WhatsApp start failed: '+e.message+R); setTimeout(startWhatsApp,5000) }
+}
+safeStart()

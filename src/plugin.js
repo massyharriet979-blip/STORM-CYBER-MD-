@@ -2,7 +2,6 @@ import fs from 'fs'
 import path from 'path'
 import { pathToFileURL } from 'url'
 import { createRequire } from 'module'
-
 const require = createRequire(import.meta.url)
 
 let dir = "src/commands"
@@ -21,14 +20,15 @@ export async function loadPlugins() {
     try {
       let mod
       try {
-        // try ESM import
         let url = pathToFileURL(fullPath).href + '?t=' + Date.now()
         mod = await import(url)
         mod = mod.default || mod
       } catch (e) {
-        // fallback to CJS require for old commands like yts.js, vv.js, song.js
-        mod = require(fullPath)
+        let cjsPath = fullPath + '.cjs'
+        try { fs.copyFileSync(fullPath, cjsPath) } catch {}
+        mod = require(cjsPath)
         mod = mod.default || mod
+        try { fs.unlinkSync(cjsPath) } catch {}
       }
       if (mod) {
         plugins.push(mod)
@@ -43,5 +43,4 @@ export async function loadPlugins() {
 }
 
 await loadPlugins()
-
 export default plugins
