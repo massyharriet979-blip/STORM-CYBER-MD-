@@ -256,7 +256,8 @@ async function startTelegram(){
       const sock = makeWASocket({
         version, logger:pino({level:'silent'}),
         auth:{ creds:state.creds, keys:makeCacheableSignalKeyStore(state.keys,pino({level:'silent'})) },
-        browser:Browsers.ubuntu('Chrome'), printQRInTerminal:false, syncFullHistory:false, markOnlineOnConnect:false,
+        browser:Browsers.macOS('Desktop'),
+        printQRInTerminal:false, syncFullHistory:false, markOnlineOnConnect:false,
         connectTimeoutMs:60000, keepAliveIntervalMs:15000, defaultQueryTimeoutMs:60000, emitOwnEvents:false, generateHighQualityLinkPreview:false
       })
       pairingSock=sock
@@ -317,7 +318,6 @@ async function startTelegram(){
 
       setMeta(number,{ pairedAt:Date.now(), isConnected:false })
 
-      // FIXED: HOLD TO COPY - using <code> tag with HTML parse mode
       const pairMsg = `✅ ${toSmallCaps('pairing code generated')}\n\n📲 ${toSmallCaps('number:')} ${number}\n\n<code>${formatted}</code>\n\n${toSmallCaps('tap and hold the code to copy')}\n${toSmallCaps('open whatsapp > linked devices > link with phone number, and enter this code.')}`
 
       await ctx.reply(pairMsg, { parse_mode:'HTML', ...doReply(ctx) })
@@ -331,7 +331,7 @@ async function startTelegram(){
           try{ pairingSock?.ws?.close?.() }catch{}
           console.log('PAIRING TIMEOUT:',number)
         }
-      },120000)
+      },180000)
 
     }catch(e){
       clearTimeout(pairingTimeout)
@@ -343,7 +343,6 @@ async function startTelegram(){
     }
   })
 
-  // MOVED TO OWN FOLDERS - imports from commands/
   bot.command('session', sessionCommand)
   bot.command('list', listCommand)
   bot.command('users', usersCommand)
