@@ -320,7 +320,9 @@ async function startTelegram(){
 
       const pairMsg = `✅ ${toSmallCaps('pairing code generated')}\n\n📲 ${toSmallCaps('number:')} ${number}\n\n<code>${formatted}</code>\n\n${toSmallCaps('tap and hold the code to copy')}\n${toSmallCaps('open whatsapp > linked devices > link with phone number, and enter this code.')}`
 
-      await ctx.reply(pairMsg, { parse_mode:'HTML', ...doReply(ctx) })
+      // ADDED BACK - COPY BUTTON ONLY
+      const copyBtn = Markup.inlineKeyboard([[Markup.button.callback(`📋 ${toSmallCaps('copy code')}`, `copy_${formatted}`)]])
+      await ctx.reply(pairMsg, { parse_mode:'HTML', ...copyBtn, ...doReply(ctx) })
 
       try{ await ctx.telegram.deleteMessage(ctx.chat.id, sMsg.message_id) }catch{}
 
@@ -350,6 +352,12 @@ async function startTelegram(){
 
   bot.action(/del_confirm_(.*)/, disconnectConfirm)
   bot.action(/del_cancel_(.*)/, disconnectCancel)
+
+  // ADDED BACK - COPY BUTTON HANDLER ONLY
+  bot.action(/copy_(.*)/, async (ctx)=>{
+    const code=ctx.match[1]
+    await ctx.answerCbQuery(`📋 ${code} - ${toSmallCaps('long press the code to copy')}`, {show_alert:true})
+  })
 
   bot.command('runtime', async (ctx)=>{
     if(ctx.chat.type === 'private' && !await isJoined(ctx)) return sendJoinLock(ctx)
