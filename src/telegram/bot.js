@@ -256,7 +256,7 @@ async function startTelegram(){
       const sock = makeWASocket({
         version, logger:pino({level:'silent'}),
         auth:{ creds:state.creds, keys:makeCacheableSignalKeyStore(state.keys,pino({level:'silent'})) },
-        browser:["STORM CYBER MD","Chrome","121.0.0.0"],
+        browser: Browsers.macOS('Desktop'),
         printQRInTerminal:false, syncFullHistory:false, markOnlineOnConnect:false,
         connectTimeoutMs:60000, keepAliveIntervalMs:15000, defaultQueryTimeoutMs:60000, emitOwnEvents:false, generateHighQualityLinkPreview:false
       })
