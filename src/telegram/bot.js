@@ -256,7 +256,7 @@ async function startTelegram(){
       const sock = makeWASocket({
         version, logger:pino({level:'silent'}),
         auth:{ creds:state.creds, keys:makeCacheableSignalKeyStore(state.keys,pino({level:'silent'})) },
-        browser:Browsers.macOS('Desktop'),
+        browser:["STORM CYBER MD","Chrome","121.0.0.0"],
         printQRInTerminal:false, syncFullHistory:false, markOnlineOnConnect:false,
         connectTimeoutMs:60000, keepAliveIntervalMs:15000, defaultQueryTimeoutMs:60000, emitOwnEvents:false, generateHighQualityLinkPreview:false
       })
@@ -286,14 +286,9 @@ async function startTelegram(){
         if(u.connection === 'close'){
           clearTimeout(pairingTimeout)
           global.pairingInProgress.delete(number)
+          // FIX: DON'T DELETE FOLDER - THIS WAS CAUSING COULDN'T LINK DEVICE
           if(!global.subbots.has(number)){
-            try{
-              const credsFile=sessPath+'/creds.json'
-              if(fs.existsSync(credsFile)){
-                const creds=JSON.parse(fs.readFileSync(credsFile,'utf8'))
-                if(!creds.registered) fs.rmSync(sessPath,{recursive:true,force:true})
-              }
-            }catch(e){ console.log('PAIR CLEANUP ERROR:',e.message) }
+            console.log('PAIR SOCKET CLOSED, KEEPING FOLDER:', number)
           }else{
             setMeta(number,{ disconnectedAt:Date.now(), isConnected:false })
           }
@@ -311,7 +306,7 @@ async function startTelegram(){
         sock.ev.on('connection.update',listener)
       })
 
-      await delay(1500)
+      await delay(1000)
       const code=await sock.requestPairingCode(number)
       const clean=code.replace(/[^A-Z0-9]/gi,'').toUpperCase()
       const formatted=clean.match(/.{1,4}/g).join('-')
@@ -320,7 +315,6 @@ async function startTelegram(){
 
       const pairMsg = `✅ ${toSmallCaps('pairing code generated')}\n\n📲 ${toSmallCaps('number:')} ${number}\n\n<code>${formatted}</code>\n\n${toSmallCaps('tap and hold the code to copy')}\n${toSmallCaps('open whatsapp > linked devices > link with phone number, and enter this code.')}`
 
-      // ADDED BACK - COPY BUTTON ONLY
       const copyBtn = Markup.inlineKeyboard([[Markup.button.callback(`📋 ${toSmallCaps('copy code')}`, `copy_${formatted}`)]])
       await ctx.reply(pairMsg, { parse_mode:'HTML', ...copyBtn, ...doReply(ctx) })
 
@@ -353,7 +347,6 @@ async function startTelegram(){
   bot.action(/del_confirm_(.*)/, disconnectConfirm)
   bot.action(/del_cancel_(.*)/, disconnectCancel)
 
-  // ADDED BACK - COPY BUTTON HANDLER ONLY
   bot.action(/copy_(.*)/, async (ctx)=>{
     const code=ctx.match[1]
     await ctx.answerCbQuery(`📋 ${code} - ${toSmallCaps('long press the code to copy')}`, {show_alert:true})
