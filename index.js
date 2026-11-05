@@ -16,6 +16,14 @@ import {
     scheduleAutoAction,
     saveAutoMuteSchedule
 } from './src/whatsapp/automute.js';
+import {
+    activeSessions,
+    startSession,
+    clearSession,
+    getPairingCode,
+    resumeSessions,
+    hasRegisteredCredentials
+} from './src/whatsapp/pairManager.js';
 import makeWASocket, { useMultiFileAuthState, Browsers, makeCacheableSignalKeyStore, fetchLatestBaileysVersion, DisconnectReason } from '@whiskeysockets/baileys'
 import pino from 'pino'
 import fs from 'fs'
@@ -36,7 +44,7 @@ if(!fs.existsSync(commandFolder)) fs.mkdirSync(commandFolder,{recursive:true})
 global.subbots = new Map()
 global.subbotOwners = []
 global.commands = new Map()
-global.pairingInProgress = new Set()
+// DELETED: global.pairingInProgress - now in pairManager as _sessionStarts + sock._pairingInProgress
 global.sessionMeta = new Map()
 global.reconnectTimers = new Map()
 function setMeta(n,d){let o=global.sessionMeta.get(n)||{};global.sessionMeta.set(n,{...o,...d})}
@@ -222,228 +230,79 @@ global.delay = delay;
 global.runtime = runtime;
 global.fmtTime = fmtTime;
 
+// ── STEP 2: subbot hooks - pairManager owns socket, STORM owns what to do ──
+const _pendingOnConnected = new Map()
+const subbotHooks = {
+  onMessage: (sock) => createMessageHandler(sock, true),
+  onGroupUpdate: async (sock, anu, phone) => {
+    try{
+      await handleWelcomeGoodbye(sock, anu, phone);
+      await handleAutokick(sock, anu, phone);
+      await handleAntipromote(sock, anu, phone);
+      await handleAntidemote(sock, anu, phone);
+    }catch(e){ console.log('subbot group update err', e.message) }
+  },
+  onOpen: async (sock, phone) => {
+    setMeta(phone,{connectedAt:Date.now(),pairedAt:global.sessionMeta.get(phone)?.pairedAt||Date.now(),disconnectedAt:null,isConnected:true})
+    if(!global.subbots.has(phone)) global.subbots.set(phone, sock)
+    if(!global.subbotOwners.includes(phone)) global.subbotOwners.push(phone)
+    syncConnectedCount()
+    try{ restoreAutoActions(sock, phone) }catch(e){ console.log('subbot restoreAutoActions err', e.message) }
+    const cb = _pendingOnConnected.get(phone)
+    if(cb){ _pendingOnConnected.delete(phone); try{ await cb() }catch(e){ console.log('pair onConnected err', e.message) } }
+  },
+  onLoggedOut: async (phone) => {
+    if(global.subbots.has(phone)){ global.subbots.delete(phone); syncConnectedCount() }
+    setMeta(phone,{disconnectedAt:Date.now(),isConnected:false})
+    console.log(Rd+`❌ SUBBOT ${phone} logged out`+R)
+  },
+  onPairingInterrupted: async (phone) => {
+    setMeta(phone,{disconnectedAt:Date.now(),isConnected:false})
+  }
+}
+global.subbotHooks = subbotHooks
+global.activeSessions = activeSessions
+global.clearSession = clearSession
+global.hasRegisteredCredentials = hasRegisteredCredentials
+global.startSession = startSession
+global.getPairingCode = getPairingCode
+
 let mainRetries = 0
 let mainReconnectTimer = null
+
+// REPLACED: was creating its own socket + its own close logic
+// Now just calls pairManager.startSession - one socket per number
 async function startSubBotSession(phoneNumber){
   global.startSubBotSession = startSubBotSession
-  try{
-    const id = phoneNumber.replace(/[^0-9]/g,'')
-    if(global.subbots.has(id)) return
-    if(global.pairingInProgress.has(id)) return
-    const sessionPath = `./sessions/${id}`
-    if(!fs.existsSync(sessionPath)) return
-    const { state, saveCreds } = await useMultiFileAuthState(sessionPath)
-    // FIX: never auto-start an un-registered folder. That folder is still pairing.
-    // Starting it here would create a 2nd socket for same number and kill the code.
-    if(!state.creds.registered) return
-    const { version } = await fetchLatestBaileysVersion()
-    const sock = makeWASocket({
-      version, logger:pino({level:'silent'}),
-      auth:{creds:state.creds, keys:makeCacheableSignalKeyStore(state.keys,pino({level:'silent'}))},
-      browser:Browsers.ubuntu('Chrome'),
-      printQRInTerminal:false, syncFullHistory:false, markOnlineOnConnect:false,
-      connectTimeoutMs:60000, keepAliveIntervalMs:15000
-    })
-    sock.ev.on('creds.update', saveCreds)
-    sock.ev.on('connection.update', (u)=>{
-      if(u.connection==='open'){
-        if(global.reconnectTimers.has(id)){
-          clearTimeout(global.reconnectTimers.get(id))
-          global.reconnectTimers.delete(id)
-        }
-        setMeta(id,{connectedAt:Date.now(),pairedAt:global.sessionMeta.get(id)?.pairedAt||Date.now(),disconnectedAt:null,isConnected:true})
-        console.log(G+`✅ SUBBOT ${id} CONNECTED`+R)
-        if(!global.subbots.has(id)) global.subbots.set(id, sock)
-        if(!global.subbotOwners.includes(id)) global.subbotOwners.push(id)
-        syncConnectedCount()
-        try{
-          restoreAutoActions(sock, id);
-        }catch(e){ console.log('subbot restoreAutoActions err', e.message) }
-      }
-      if(u.connection==='close'){
-        const statusCode = u.lastDisconnect?.error?.output?.statusCode
-        const isLoggedOut = statusCode === DisconnectReason.loggedOut || statusCode === 401
-        if(global.subbots.has(id)){ global.subbots.delete(id); syncConnectedCount() }
-        setMeta(id,{disconnectedAt:Date.now(),isConnected:false})
-        console.log(Y+`⚠️ SUBBOT ${id} CLOSED code:${statusCode} loggedOut:${isLoggedOut}`+R)
-        if(isLoggedOut){
-          console.log(Rd+`❌ SUBBOT ${id} logged out, not retrying. Delete ./sessions/${id} to re-pair`+R)
-          if(global.reconnectTimers.has(id)){
-            clearTimeout(global.reconnectTimers.get(id))
-            global.reconnectTimers.delete(id)
-          }
-          return
-        }
-        if(global.reconnectTimers.has(id)) return
-        let timer = setTimeout(()=>{ global.reconnectTimers.delete(id); startSubBotSession(id) },5000)
-        global.reconnectTimers.set(id, timer)
-      }
-    })
-    sock.ev.on('messages.upsert', createMessageHandler(sock, true))
-    sock.ev.on('group-participants.update', async (anu)=>{
-     try{
-      await handleWelcomeGoodbye(sock, anu, id);
-      await handleAutokick(sock, anu, id);
-      await handleAntipromote(sock, anu, id);
-      await handleAntidemote(sock, anu, id);
-     }catch(e){ console.log('subbot group update err', e.message) }
-    });
-
-  }catch(e){ console.log('subbot start error',e.message) }
+  const id = String(phoneNumber).replace(/[^0-9]/g,'')
+  return startSession(id, null, false, subbotHooks)
 }
 
-// ENGINE ONLY - called by Telegram helper (bot.js). Telegram never creates socket.
-// FIX: Engine OWNS pairingInProgress. bot.js never adds/deletes it.
+// REPLACED: was creating its own socket, deleting folder, 25s timeout, 3s delay, own pairingTimeout
+// Now: startSession (reuse / clear incomplete) + getPairingCode (1500ms wait, 65s timeout)
 global.requestPairFromEngine = async (number, { onConnected } = {}) => {
   const id = String(number).replace(/[^0-9]/g,'')
   if(global.subbots.has(id)) throw new Error('already connected')
-  if(global.pairingInProgress.has(id)) throw new Error('already pairing')
-  global.pairingInProgress.add(id)
-
-  const sessionPath = `./sessions/${id}`
-  let opened = false
-  let pairingTimeout = null
-  let sock = null
-  let cleaned = false
-  const cleanup = () => {
-    if(cleaned) return
-    cleaned = true
-    global.pairingInProgress.delete(id)
-    if(pairingTimeout) clearTimeout(pairingTimeout)
-  }
-
+  if(hasRegisteredCredentials(id)) throw new Error('already registered')
+  if(typeof onConnected === 'function') _pendingOnConnected.set(id, onConnected)
   try{
-    // FIX: validate creds BEFORE reusing. Stale half-registered creds = WhatsApp rejects code.
-    try{
-      const oldFile = sessionPath+'/creds.json'
-      if(fs.existsSync(oldFile)){
-        const oc = JSON.parse(fs.readFileSync(oldFile,'utf8'))
-        if(oc.registered) throw new Error('already registered')
-        fs.rmSync(sessionPath, {recursive:true, force:true})
-        console.log('CLEANED STALE SESSION FOR', id)
-      }
-    }catch(e){
-      if(e.message === 'already registered') throw e
-    }
-
-    const { state, saveCreds } = await useMultiFileAuthState(sessionPath)
-    if(state.creds.registered) throw new Error('already registered')
-
-    const { version } = await fetchLatestBaileysVersion()
-    sock = makeWASocket({
-      version, logger:pino({level:'silent'}),
-      auth:{creds:state.creds, keys:makeCacheableSignalKeyStore(state.keys,pino({level:'silent'}))},
-      // FIX: ONE browser everywhere - was macOS here, ubuntu elsewhere. Now ubuntu Chrome everywhere.
-      browser: Browsers.ubuntu('Chrome'),
-      printQRInTerminal:false, syncFullHistory:false, markOnlineOnConnect:false,
-      connectTimeoutMs:60000, keepAliveIntervalMs:15000, defaultQueryTimeoutMs:60000, emitOwnEvents:false, generateHighQualityLinkPreview:false
-    })
-    sock.ev.on('creds.update', saveCreds)
-    sock.ev.on('connection.update', async (u)=>{
-      if(u.connection === 'open'){
-        if(opened) return
-        opened = true
-        cleanup()
-        if(global.reconnectTimers.has(id)){ clearTimeout(global.reconnectTimers.get(id)); global.reconnectTimers.delete(id) }
-        if(!global.subbots.has(id)) global.subbots.set(id, sock)
-        if(!global.subbotOwners.includes(id)) global.subbotOwners.push(id)
-        syncConnectedCount()
-        setMeta(id,{connectedAt:Date.now(),pairedAt:Date.now(),disconnectedAt:null,isConnected:true})
-        try{ restoreAutoActions(sock, id) }catch(e){ console.log('pair restoreAutoActions err', e.message) }
-        try{ if(typeof onConnected === 'function') await onConnected() }catch(e){ console.log('pair onConnected err', e.message) }
-      }
-      if(u.connection === 'close'){
-        const statusCode = u.lastDisconnect?.error?.output?.statusCode
-        const isLoggedOut = statusCode === DisconnectReason.loggedOut || statusCode === 401
-        if(!opened){
-          cleanup()
-          console.log('PAIR SOCKET CLOSED BEFORE OPEN, KEEPING FOLDER:', id, 'code:', statusCode)
-          return
-        }
-        if(global.subbots.has(id)){ global.subbots.delete(id); syncConnectedCount() }
-        setMeta(id,{disconnectedAt:Date.now(),isConnected:false})
-        console.log(Y+`⚠️ SUBBOT ${id} CLOSED code:${statusCode} loggedOut:${isLoggedOut}`+R)
-        if(isLoggedOut){
-          console.log(Rd+`❌ SUBBOT ${id} logged out, not retrying. Delete ./sessions/${id} to re-pair`+R)
-          if(global.reconnectTimers.has(id)){ clearTimeout(global.reconnectTimers.get(id)); global.reconnectTimers.delete(id) }
-          return
-        }
-        if(global.reconnectTimers.has(id)) return
-        let timer = setTimeout(()=>{ global.reconnectTimers.delete(id); startSubBotSession(id) },5000)
-        global.reconnectTimers.set(id, timer)
-      }
-    })
-    sock.ev.on('messages.upsert', createMessageHandler(sock, true))
-    sock.ev.on('group-participants.update', async (anu)=>{
-      try{
-        await handleWelcomeGoodbye(sock, anu, id);
-        await handleAutokick(sock, anu, id);
-        await handleAntipromote(sock, anu, id);
-        await handleAntidemote(sock, anu, id);
-      }catch(e){ console.log('pair group update err', e.message) }
-    })
-
-    // FIX: don't resolve on 'connecting' alone. Wait for connecting AND handshake settle.
-    // And FIX: reject immediately on 'close', don't wait 25s doing nothing.
-    await new Promise((resolve,reject)=>{
-      let done=false
-      const timeout=setTimeout(()=>{ if(!done){ done=true; reject(new Error('Socket timeout while connecting')) } },25000)
-      const listener=(u)=>{
-        if(done) return
-        if(u.connection === 'close'){
-          done=true; clearTimeout(timeout); reject(new Error('Socket closed before pairing'))
-        }
-        if(u.connection === 'connecting' || u.connection === 'open'){
-          done=true; clearTimeout(timeout); resolve()
-        }
-      }
-      sock.ev.on('connection.update',listener)
-    })
-    // FIX: 3s handshake settle, was 1s. Code requested too early = WhatsApp rejects it.
-    await delay(3000)
-
-    const code = await sock.requestPairingCode(id)
-    const clean = String(code).replace(/[^A-Z0-9]/gi,'').toUpperCase()
-    const formatted = clean.match(/.{1,4}/g).join('-')
+    const sock = await startSession(id, null, false, subbotHooks)
+    // If startSession reused an already-connected socket, don't give a code
+    if(sock?.user?.id || activeSessions.get(id)?.connected) throw new Error('already connected')
+    const code = await getPairingCode(sock, id)
     setMeta(id,{pairedAt:Date.now(),isConnected:false})
-
-    // FIX: pairing timeout = one cleanup, same as connection timeout. Clears flag + closes socket.
-    pairingTimeout = setTimeout(()=>{
-      if(!opened){
-        cleanup()
-        try{ sock.end?.() }catch{}
-        try{ sock.ws?.close?.() }catch{}
-        console.log('PAIRING TIMEOUT:',id)
-      }
-    },180000)
-    return formatted
-
+    return code
   }catch(e){
-    cleanup()
-    try{ sock?.end?.() }catch{}
-    try{ sock?.ws?.close?.() }catch{}
+    _pendingOnConnected.delete(id)
     throw e
   }
 }
 
 async function startAllSubBots(){
   global.startAllSubBots = startAllSubBots
-  try{
-    const dirs = fs.readdirSync('./sessions')
-    for(let d of dirs){
-      if(d.length >= 10){
-        // FIX: skip un-registered folders - they are still pairing, don't start 2nd socket
-        try{
-          const cf = './sessions/'+d+'/creds.json'
-          if(!fs.existsSync(cf)) continue
-          const c = JSON.parse(fs.readFileSync(cf,'utf8'))
-          if(!c.registered) continue
-        }catch{ continue }
-        await delay(2000)
-        startSubBotSession(d)
-      }
-    }
-  }catch(e){ console.log('startAllSubBots err', e.message) }
+  // REPLACED: was looping folders + startSubBotSession (2nd socket risk)
+  // Now: resumeSessions skips unregistered folders, reuses pairManager
+  await resumeSessions(subbotHooks)
 }
 
 async function startWhatsApp(){

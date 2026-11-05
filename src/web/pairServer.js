@@ -1,12 +1,12 @@
 import express from 'express'
 import cors from 'cors'
 import fs from 'fs'
-import makeWASocket, { useMultiFileAuthState, Browsers, makeCacheableSignalKeyStore, fetchLatestBaileysVersion } from '@whiskeysockets/baileys'
-import pino from 'pino'
+
 const app = express()
 app.use(cors({origin:'*'})); app.use(express.json())
 const PORT = process.env.PORT || process.env.SERVER_PORT || 2505
-const tempSockets = new Map()
+// DELETED: tempSockets - no more ./temp_pair/ socket, no more copy on open
+// DELETED: makeWASocket import - Web never creates socket anymore, engine does
 
 function statusOf(n){
   const id=(n||'').replace(/[^0-9]/g,'')
@@ -49,50 +49,51 @@ app.post('/api/pair',async(req,res)=>{
     let id=(req.body.number||'').replace(/[^0-9]/g,'')
     if(!id) return res.status(400).json({error:"NUMBER REQUIRED"})
     if(global.subbots?.has(id)) return res.json({status:"ALREADY_CONNECTED", ...statusOf(id)})
-    if(global.pairingInProgress?.has(id)) return res.json({status:"PAIRING_IN_PROGRESS",message:"WAIT 60S - PAIRING IN PROGRESS FOR THIS NUMBER"})
+    // DELETED: global.pairingInProgress check - pairManager handles double-start via _sessionStarts
     const mainNum = (process.env.MAIN_NUMBER||'').replace(/[^0-9]/g,'')
     if(mainNum && id === mainNum) return res.status(400).json({error:"CANNOT PAIR MAIN BOT NUMBER"})
 
-    global.pairingInProgress?.add(id)
-    const tmp=`./temp_pair/${id}`; fs.mkdirSync(tmp,{recursive:true})
-    const {state,saveCreds}=await useMultiFileAuthState(tmp)
-    const {version}=await fetchLatestBaileysVersion()
-    const sock=makeWASocket({version, logger:pino({level:'silent'}), auth:{creds:state.creds, keys:makeCacheableSignalKeyStore(state.keys,pino({level:'silent'}))}, browser:Browsers.ubuntu('Chrome')})
-    sock.ev.on('creds.update',saveCreds); await new Promise(r=>setTimeout(r,2000))
-    let code=await sock.requestPairingCode(id); let formatted=code.match(/.{1,4}/g).join('-')
-    tempSockets.set(id,sock)
-    const to=setTimeout(()=>{try{sock.ws?.close()}catch{}; tempSockets.delete(id); global.pairingInProgress?.delete(id); try{fs.rmSync(tmp,{recursive:true,force:true})}catch{}},120000)
-    sock.ev.on('connection.update',async(u)=>{
-      if(u.connection==='open'){
-        clearTimeout(to); 
-        const real=`./sessions/${id}`; 
-        fs.mkdirSync(real,{recursive:true}); 
-        try{fs.cpSync(tmp,real,{recursive:true})}catch{}; 
-        try{fs.rmSync(tmp,{recursive:true,force:true})}catch{}; 
-        try{sock.ws?.close()}catch{}
-        tempSockets.delete(id); 
-        global.pairingInProgress?.delete(id); 
-        if(global.startSubBotSession) global.startSubBotSession(id)
-      }
-      if(u.connection==='close'){
-        clearTimeout(to)
-        tempSockets.delete(id)
+    if(typeof global.requestPairFromEngine !== 'function'){
+      return res.status(500).json({error:"ENGINE NOT READY - RESTART BOT"})
+    }
+
+    // STEP 4: Web now uses SAME engine as Telegram - startSession + getPairingCode
+    // No temp_pair, no 2nd socket, no copy on open.
+    // If user does not enter code in 5 min, Telegram pending expiry / next startSession clears it.
+    // Web does NOT auto-delete on timeout - next /pair will clear incomplete via startSession.
+    const formatted = await global.requestPairFromEngine(id, {
+      onConnected: () => {
+        console.log(`✅ WEB PAIR CONNECTED ${id}`)
       }
     })
+
     res.json({status:"CODE_SENT", code:formatted, copy:formatted.replace(/-/g,''), formatted:formatted, number:id, message:"CODE GENERATED - ENTER IT IN WHATSAPP"})
-  }catch(e){ 
-    const nid=(req.body.number||'').replace(/[^0-9]/g,''); 
-    global.pairingInProgress?.delete(nid); 
-    try{fs.rmSync(`./temp_pair/${nid}`,{recursive:true,force:true})}catch{}; 
-    res.status(500).json({error:e.message.toUpperCase()}) 
+  }catch(e){
+    const nid=(req.body.number||'').replace(/[^0-9]/g,'');
+    const msg = String(e.message || '').toUpperCase()
+    // Map engine errors to your old Web messages
+    if(msg.includes('ALREADY CONNECTED') || msg.includes('ALREADY REGISTERED')){
+      return res.json({status:"ALREADY_CONNECTED", ...statusOf(nid)})
+    }
+    if(msg.includes('ALREADY PAIRING')){
+      return res.json({status:"PAIRING_IN_PROGRESS",message:"WAIT 60S - PAIRING IN PROGRESS FOR THIS NUMBER"})
+    }
+    res.status(500).json({error:msg})
   }
 })
 
-app.post('/api/disconnect',(req,res)=>{
-  const id=(req.body.number||'').replace(/[^0-9]/g,''); 
+app.post('/api/disconnect',async (req,res)=>{
+  const id=(req.body.number||'').replace(/[^0-9]/g,'');
   if(!id) return res.status(400).json({error:"NUMBER REQUIRED"})
-  try{global.subbots?.get(id)?.ws?.close()}catch{}
-  try{global.subbots?.delete(id)}catch{}
+  try{
+    // Use pairManager clearSession - closes socket + clears timers + deletes folder
+    if(typeof global.clearSession === 'function'){
+      await global.clearSession(id)
+    } else {
+      try{global.subbots?.get(id)?.ws?.close()}catch{}
+      try{global.subbots?.delete(id)}catch{}
+    }
+  }catch{}
   try{
     if(global.reconnectTimers?.has(id)){
       clearTimeout(global.reconnectTimers.get(id))
@@ -100,7 +101,10 @@ app.post('/api/disconnect',(req,res)=>{
     }
   }catch{}
   try{ if(global.sessionMeta?.has(id)) global.sessionMeta.delete(id) }catch{}
-  if(fs.existsSync(`./sessions/${id}`)) fs.rmSync(`./sessions/${id}`,{recursive:true,force:true}); 
+  // clearSession already deleted ./sessions/${id}, but keep fallback if old path used
+  if(fs.existsSync(`./sessions/${id}`) && typeof global.clearSession !== 'function') fs.rmSync(`./sessions/${id}`,{recursive:true,force:true});
+  // Clean any leftover temp_pair from OLD version
+  if(fs.existsSync(`./temp_pair/${id}`)) fs.rmSync(`./temp_pair/${id}`,{recursive:true,force:true});
   res.json({success:true, message:`${id} DISCONNECTED SUCCESSFULLY`})
 })
 

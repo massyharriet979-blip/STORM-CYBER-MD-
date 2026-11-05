@@ -35,9 +35,37 @@ const delay = (ms) => new Promise(r=>setTimeout(r,ms))
 
 if(!global.subbots) global.subbots = new Map()
 if(!global.subbotOwners) global.subbotOwners = []
-if(!global.pairingInProgress) global.pairingInProgress = new Set()
+// DELETED: global.pairingInProgress - now in pairManager as _sessionStarts + sock._pairingInProgress
+// Telegram no longer touches it. It uses its own pending map below.
 if(!global.sessionMeta) global.sessionMeta = new Map()
 let startTime = Date.now()
+
+// STEP 3: Telegram pending guard - like his pendingTelegramPairs
+// Key = phone number. If code issued but not connected in 5 min, clearSession.
+// This stops unlinked junk folders piling up, and stops double-pair for same number.
+const pendingTelegramPairs = new Map() // number -> { timer, tgId }
+function watchPendingPair(number, tgId){
+  if(pendingTelegramPairs.has(number)){
+    clearTimeout(pendingTelegramPairs.get(number).timer)
+  }
+  const timer = setTimeout(async ()=>{
+    pendingTelegramPairs.delete(number)
+    // Only clear if still NOT connected. If connected, pairManager already marked it.
+    if(global.subbots?.has(number)) return
+    if(global.activeSessions?.get(number)?.connected) return
+    try{
+      if(typeof global.clearSession === 'function') await global.clearSession(number)
+      console.log(`[Telegram] Pair expired for ${number} - cleared`)
+    }catch(e){ console.log('pair expiry clear err', e.message) }
+  }, 5 * 60 * 1000)
+  if(timer.unref) timer.unref()
+  pendingTelegramPairs.set(number, { timer, tgId })
+}
+function finishPendingPair(number){
+  const p = pendingTelegramPairs.get(number)
+  if(p) clearTimeout(p.timer)
+  pendingTelegramPairs.delete(number)
+}
 
 function syncConnectedCount(){ return global.subbots.size }
 function getConnected(){ return global.subbots.size }
@@ -115,7 +143,7 @@ async function getBotPhoto(ctx){
   return null
 }
 function doReply(ctx){
-  try{ if(ctx.message) return { reply_parameters: { message_id: ctx.message.message_id } } }catch{}
+  try{ if(ctx.message) return { reply_parameters: { message_id: ctx.message.message_id } }catch{}
   return {}
 }
 async function sendMainMenu(ctx){
@@ -236,16 +264,13 @@ async function startTelegram(){
         }
       }catch(e){ console.log('SESSION READ ERROR:',e.message) }
     }
-    // FIX: READ-ONLY check only. bot.js NEVER adds/deletes pairingInProgress.
-    // Engine in index.js owns it and cleans it in finally on every path.
-    if(global.pairingInProgress.has(number)){
+    // STEP 3: Telegram pending guard - NOT global.pairingInProgress anymore
+    if(pendingTelegramPairs.has(number)){
       return ctx.reply(toSmallCaps(`⏳ ${number} is already pairing, wait for the current request to finish...`), doReply(ctx))
     }
-    // HELPER ONLY: ask engine (index.js) for code, do NOT create socket here
     if(typeof global.requestPairFromEngine !== 'function'){
       return ctx.reply(toSmallCaps(`❌ engine not ready. restart bot in panel and try again.`), doReply(ctx))
     }
-    // FIX: NO global.pairingInProgress.add(number) here anymore
     let sMsg=await ctx.reply(toSmallCaps(`🔍 requesting server information...`), doReply(ctx))
     await delay(500)
     try{ await ctx.telegram.editMessageText(ctx.chat.id,sMsg.message_id,null,toSmallCaps(`🖥️ looking for a ready server...`)) }catch{}
@@ -254,18 +279,21 @@ async function startTelegram(){
     try{
       const formatted = await global.requestPairFromEngine(number, {
         onConnected: () => {
+          finishPendingPair(number)
           saveTgSession(String(ctx.from.id), number)
           setMeta(number,{ connectedAt:Date.now(), pairedAt:Date.now(), isConnected:true })
           ctx.reply(toSmallCaps(`✅ ${number} connected! session saved on server.`), doReply(ctx)).catch(()=>{})
         }
       })
       setMeta(number,{ pairedAt:Date.now(), isConnected:false })
-      const pairMsg = `✅ ${toSmallCaps('pairing code generated')}\n\n📲 ${toSmallCaps('number:')} ${number}\n\n<code>${formatted}</code>\n\n${toSmallCaps('tap and hold the code to copy')}\n${toSmallCaps('open whatsapp > linked devices > link with phone number, and enter this code.')}`
+      // Start 5-min expiry now that code is issued
+      watchPendingPair(number, String(ctx.from.id))
+      const pairMsg = `✅ ${toSmallCaps('pairing code generated')}\n\n📲 ${toSmallCaps('number:')} ${number}\n\n<code>${formatted}</code>\n\n${toSmallCaps('tap and hold the code to copy')}\n${toSmallCaps('open whatsapp > linked devices > link with phone number, and enter this code.')}\n\n${toSmallCaps('⚡ code expires in 5 minutes')}`
       const copyBtn = Markup.inlineKeyboard([[Markup.button.callback(`📋 ${toSmallCaps('copy code')}`, `copy_${formatted}`)]])
       await ctx.reply(pairMsg, { parse_mode:'HTML', ...copyBtn, ...doReply(ctx) })
       try{ await ctx.telegram.deleteMessage(ctx.chat.id, sMsg.message_id) }catch{}
     }catch(e){
-      // FIX: NO global.pairingInProgress.delete(number) here anymore - engine does it
+      finishPendingPair(number)
       console.log('PAIR ERROR',e.message)
       try{ await ctx.telegram.deleteMessage(ctx.chat.id, sMsg.message_id) }catch{}
       const msg = String(e.message || '').toLowerCase()
@@ -273,7 +301,7 @@ async function startTelegram(){
         await ctx.reply(toSmallCaps(`⏳ ${number} is already pairing, wait for the current request to finish...`), doReply(ctx))
       } else if(msg.includes('already registered') || msg.includes('already connected')){
         await ctx.reply(toSmallCaps(`✅ ${number} is already registered / connected. use /session to check.`), doReply(ctx))
-      } else if(msg.includes('socket closed') || msg.includes('socket timeout')){
+      } else if(msg.includes('socket closed') || msg.includes('socket timeout') || msg.includes('timed out')){
         await ctx.reply(toSmallCaps(`❌ socket closed while connecting for ${number}. whatsapp server was busy. wait 2 mins and try /pair again - do not spam.`), doReply(ctx))
       } else {
         await ctx.reply(toSmallCaps(`❌ ғᴀɪʟᴇᴅ ᴛᴏ ɢᴇɴᴇʀᴀᴛᴇ ᴄᴏᴅᴇ ғᴏʀ ${number}. try again after 2 mins. make sure number is on whatsapp.`), doReply(ctx))
