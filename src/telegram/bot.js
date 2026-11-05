@@ -1,7 +1,5 @@
 import { Telegraf, Markup } from 'telegraf'
 import fs from 'fs'
-import pino from 'pino'
-import { Browsers, useMultiFileAuthState, makeWASocket, makeCacheableSignalKeyStore, fetchLatestBaileysVersion } from '@whiskeysockets/baileys'
 import { sessionCommand } from './commands/session.js'
 import { disconnectCommand, disconnectConfirm, disconnectCancel } from './commands/disconnect.js'
 import { listCommand } from './commands/list.js'
@@ -151,7 +149,7 @@ async function sendMainMenu(ctx){
   const photo=await getBotPhoto(ctx)
   const kb=Markup.inlineKeyboard([[Markup.button.url('👥 Group', GROUP_LINK), Markup.button.url('📢 Channel', CHANNEL_LINK)],[Markup.button.url('👑 Owner', OWNER_LINK)]])
   if(photo) await ctx.replyWithPhoto(photo,{caption:msg, parse_mode: 'HTML', ...kb,...doReply(ctx)})
- else await ctx.reply(msg,{parse_mode: 'HTML', ...kb,...doReply(ctx)}) 
+ else await ctx.reply(msg,{parse_mode: 'HTML', ...kb,...doReply(ctx)})
 }
 async function sendJoinLock(ctx){
   const photo=await getBotPhoto(ctx)
@@ -241,99 +239,31 @@ async function startTelegram(){
     if(global.pairingInProgress.has(number)){
       return ctx.reply(toSmallCaps(`⏳ ${number} is already pairing, wait for the current request to finish...`), doReply(ctx))
     }
+    // HELPER ONLY: ask engine (index.js) for code, do NOT create socket here
+    if(typeof global.requestPairFromEngine !== 'function'){
+      return ctx.reply(toSmallCaps(`❌ engine not ready. restart bot in panel and try again.`), doReply(ctx))
+    }
     global.pairingInProgress.add(number)
     let sMsg=await ctx.reply(toSmallCaps(`🔍 requesting server information...`), doReply(ctx))
     await delay(500)
     try{ await ctx.telegram.editMessageText(ctx.chat.id,sMsg.message_id,null,toSmallCaps(`🖥️ looking for a ready server...`)) }catch{}
     await delay(600)
     try{ await ctx.telegram.editMessageText(ctx.chat.id,sMsg.message_id,null,toSmallCaps(`🔗 opening socket for ${number}...`)) }catch{}
-    let pairingSock=null
-    let pairingOpened=false
-    let pairingTimeout=null
     try{
-      const { version } = await fetchLatestBaileysVersion()
-      const { state, saveCreds } = await useMultiFileAuthState(sessPath)
-      const sock = makeWASocket({
-        version, logger:pino({level:'silent'}),
-        auth:{ creds:state.creds, keys:makeCacheableSignalKeyStore(state.keys,pino({level:'silent'})) },
-        browser: Browsers.macOS('Desktop'),
-        printQRInTerminal:false, syncFullHistory:false, markOnlineOnConnect:false,
-        connectTimeoutMs:60000, keepAliveIntervalMs:15000, defaultQueryTimeoutMs:60000, emitOwnEvents:false, generateHighQualityLinkPreview:false
-      })
-      pairingSock=sock
-      sock.ev.on('creds.update', saveCreds)
-
-      sock.ev.on('connection.update', async (u)=>{
-        if(u.connection === 'open'){
-          if(pairingOpened) return
-          pairingOpened=true
-          clearTimeout(pairingTimeout)
-          global.pairingInProgress.delete(number)
-          if(!global.subbots.has(number)){
-            global.subbots.set(number, sock)
-            if(!global.subbotOwners.includes(number)) global.subbotOwners.push(number)
-            if(typeof global.createMessageHandler === 'function'){
-              try{
-                const handler=global.createMessageHandler(sock,true)
-                if(typeof handler === 'function') sock.ev.on('messages.upsert',handler)
-              }catch(e){ console.log('MESSAGE HANDLER ERROR:',e.message) }
-            }
-          }
+      const formatted = await global.requestPairFromEngine(number, {
+        onConnected: () => {
           saveTgSession(String(ctx.from.id), number)
           setMeta(number,{ connectedAt:Date.now(), pairedAt:Date.now(), isConnected:true })
           ctx.reply(toSmallCaps(`✅ ${number} connected! session saved on server.`), doReply(ctx)).catch(()=>{})
         }
-        if(u.connection === 'close'){
-          clearTimeout(pairingTimeout)
-          global.pairingInProgress.delete(number)
-          // FIX: DON'T DELETE FOLDER - THIS WAS CAUSING COULDN'T LINK DEVICE
-          if(!global.subbots.has(number)){
-            console.log('PAIR SOCKET CLOSED, KEEPING FOLDER:', number)
-          }else{
-            setMeta(number,{ disconnectedAt:Date.now(), isConnected:false })
-          }
-        }
       })
-
-      await new Promise((resolve,reject)=>{
-        let resolved=false
-        const timeout=setTimeout(()=>{ if(!resolved){ resolved=true; reject(new Error('Socket timeout while connecting')) } },25000)
-        const listener=(u)=>{
-          if((u.connection === 'connecting' || u.connection === 'open') && !resolved){
-            resolved=true; clearTimeout(timeout); resolve()
-          }
-        }
-        sock.ev.on('connection.update',listener)
-      })
-
-      await delay(1000)
-      const code=await sock.requestPairingCode(number)
-      const clean=code.replace(/[^A-Z0-9]/gi,'').toUpperCase()
-      const formatted=clean.match(/.{1,4}/g).join('-')
-
       setMeta(number,{ pairedAt:Date.now(), isConnected:false })
-
       const pairMsg = `✅ ${toSmallCaps('pairing code generated')}\n\n📲 ${toSmallCaps('number:')} ${number}\n\n<code>${formatted}</code>\n\n${toSmallCaps('tap and hold the code to copy')}\n${toSmallCaps('open whatsapp > linked devices > link with phone number, and enter this code.')}`
-
       const copyBtn = Markup.inlineKeyboard([[Markup.button.callback(`📋 ${toSmallCaps('copy code')}`, `copy_${formatted}`)]])
       await ctx.reply(pairMsg, { parse_mode:'HTML', ...copyBtn, ...doReply(ctx) })
-
       try{ await ctx.telegram.deleteMessage(ctx.chat.id, sMsg.message_id) }catch{}
-
-      pairingTimeout=setTimeout(()=>{
-        if(!pairingOpened){
-          global.pairingInProgress.delete(number)
-          try{ pairingSock?.end?.() }catch{}
-          try{ pairingSock?.ws?.close?.() }catch{}
-          console.log('PAIRING TIMEOUT:',number)
-        }
-      },180000)
-
     }catch(e){
-      clearTimeout(pairingTimeout)
       global.pairingInProgress.delete(number)
-      try{ pairingSock?.end?.() }catch{}
-      try{ pairingSock?.ws?.close?.() }catch{}
       console.log('PAIR ERROR',e.message)
       await ctx.reply(toSmallCaps(`❌ ғᴀɪʟᴇᴅ ᴛᴏ ɢᴇɴᴇʀᴀᴛᴇ ᴄᴏᴅᴇ ғᴏʀ ${number}. try again after 2 mins. make sure number is on whatsapp.`), doReply(ctx))
     }
