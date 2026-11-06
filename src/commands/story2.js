@@ -1,4 +1,4 @@
-module.exports={
+export default{
 name:"story2",
 aliases:["storyteller","hadithi"],
 execute: async(sock,m,args)=>{

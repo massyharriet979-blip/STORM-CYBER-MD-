@@ -1,3 +1,6 @@
+import pino from 'pino'
+import fs from 'fs'
+import path from 'path'
 // STORM-CYBER-MD — Pair Manager
 // One place owns ALL sockets. Telegram + Web both call startSession().
 // Adapted from proven pattern: reuse socket, never 2 sockets for same number.
@@ -9,9 +12,6 @@ import makeWASocket, {
   makeCacheableSignalKeyStore,
   Browsers
 } from '@whiskeysockets/baileys'
-import pino from 'pino'
-import fs from 'fs'
-import path from 'path'
 
 const SESSIONS_ROOT = path.join(process.cwd(), 'sessions')
 if (!fs.existsSync(SESSIONS_ROOT)) fs.mkdirSync(SESSIONS_ROOT, { recursive: true })

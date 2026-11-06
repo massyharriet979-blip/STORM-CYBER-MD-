@@ -1,4 +1,4 @@
-module.exports={
+export default{
 name:"rebot",
 aliases:["reboot","restart","rb","fakereboot"],
 execute: async(sock,m,args)=>{

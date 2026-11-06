@@ -1,4 +1,4 @@
-module.exports={
+export default{
 name:"repo",
 aliases:["sc","script","source","repository"],
 execute: async(sock,m,args)=>{

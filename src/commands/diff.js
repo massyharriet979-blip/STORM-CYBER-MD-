@@ -1,4 +1,4 @@
-module.exports={
+export default{
 name:"diff",
 aliases:["difference","compare"],
 execute: async(sock,m,args)=>{

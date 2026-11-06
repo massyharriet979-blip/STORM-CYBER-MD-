@@ -1,4 +1,4 @@
-import { schedules } from './scheduled.js'
+import { schedules } from '../lib/scheduled.js'
 
 export default {
   name: 'cancel',

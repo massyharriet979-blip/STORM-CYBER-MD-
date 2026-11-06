@@ -1,6 +1,6 @@
-// src/whatsapp/antibug.js - moved from index.js
 import fs from 'fs'
 import { isBugMessage } from '../commands/antibug.js'
+// src/whatsapp/antibug.js - moved from index.js
 
 const delay = (ms) => new Promise(r=>setTimeout(r,ms))
 

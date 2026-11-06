@@ -1,4 +1,4 @@
-module.exports={
+export default{
 name:"age",
 aliases:["myage","agecalc"],
 execute: async(sock,m,args)=>{

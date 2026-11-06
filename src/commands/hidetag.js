@@ -1,4 +1,4 @@
-module.exports={
+export default{
 name:"hidetag",
 aliases:["hide","htag","tag"],
 execute: async(sock,m,args)=>{

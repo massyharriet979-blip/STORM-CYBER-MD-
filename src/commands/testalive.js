@@ -1,4 +1,4 @@
-module.exports={
+export default{
 name:"testalive",
 aliases:["alive","bot","test"],
 execute: async(sock,m)=>{

@@ -1,5 +1,5 @@
-// src/whatsapp/antilink.js - Antilink logic separated from index.js
 import fs from 'fs'
+// src/whatsapp/antilink.js - Antilink logic separated from index.js
 
 const delay = (ms) => new Promise(r=>setTimeout(r,ms))
 

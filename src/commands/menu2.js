@@ -1,8 +1,8 @@
+import os from 'os'
 function small(t){
  const m={a:'ᴀ',b:'ʙ',c:'ᴄ',d:'ᴅ',e:'ᴇ',f:'ғ',g:'ɢ',h:'ʜ',i:'ɪ',j:'ᴊ',k:'ᴋ',l:'ʟ',m:'ᴍ',n:'ɴ',o:'ᴏ',p:'ᴘ',q:'ǫ',r:'ʀ',s:'s',t:'ᴛ',u:'ᴜ',v:'ᴠ',w:'ᴡ',x:'x',y:'ʏ',z:'ᴢ',0:'𝟶',1:'𝟷',2:'𝟸',3:'𝟹',4:'𝟺',5:'𝟻',6:'𝟼',7:'𝟽',8:'𝟾',9:'𝟿'}
  return t.toLowerCase().split('').map(c=>m[c]||c).join('')
 }
-import os from 'os'
 
 export default {
 name:"menu2",
@@ -175,7 +175,7 @@ execute: async(sock, m, args)=>{
 > ┃✯╰──────────────────❍
 > ╰════════════════════⊷⍟
 > 
-> ┃◆ © *`ᴘᴏᴡᴇʀᴇᴅ ʙʏ STORM CYBER MD`
+> ┃◆ © *\`ᴘᴏᴡᴇʀᴇᴅ ʙʏ STORM CYBER MD\`
 > ╰════════════════════⊷❍
 `
 

@@ -1,4 +1,4 @@
-module.exports={
+export default{
 name:"resetprocess",
 aliases:["reset","rstproc"],
 execute: async(sock,m)=>{

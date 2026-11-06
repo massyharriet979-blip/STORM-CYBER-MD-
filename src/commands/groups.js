@@ -1,4 +1,4 @@
-module.exports={
+export default{
 name:"groups",
 aliases:["allgroups","grouplist","grps"],
 execute: async(sock,m)=>{

@@ -1,4 +1,4 @@
-module.exports={
+export default{
 name:"uptime",
 aliases:["up","runtime"],
 execute: async(sock,m)=>{
