@@ -143,7 +143,7 @@ async function getBotPhoto(ctx){
   return null
 }
 function doReply(ctx){
-  try{ if(ctx.message) return { reply_parameters: { message_id: ctx.message.message_id } }catch{}
+  try{ if(ctx.message) return { reply_parameters: { message_id: ctx.message.message_id } } }catch{}
   return {}
 }
 async function sendMainMenu(ctx){
