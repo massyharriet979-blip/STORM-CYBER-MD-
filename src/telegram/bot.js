@@ -5,7 +5,7 @@ import { disconnectCommand, disconnectConfirm, disconnectCancel } from './comman
 import { listCommand } from './commands/list.js'
 import { usersCommand } from './commands/users.js'
 
-const R="\x1b[0m", B="\x1b[1m", C="\x1b[36m", G="\x1b[32m", Y="\x1b[33m"
+const R="\x1b[0m", B="\x1b[1m", C="\x1b[36m", G="\x1b[32m", Y="\x1b[33m", Rd="\x1b[31m"
 
 try{
   if(!process.env.TELEGRAM_TOKEN && fs.existsSync('./.env')){
@@ -35,22 +35,16 @@ const delay = (ms) => new Promise(r=>setTimeout(r,ms))
 
 if(!global.subbots) global.subbots = new Map()
 if(!global.subbotOwners) global.subbotOwners = []
-// DELETED: global.pairingInProgress - now in pairManager as _sessionStarts + sock._pairingInProgress
-// Telegram no longer touches it. It uses its own pending map below.
 if(!global.sessionMeta) global.sessionMeta = new Map()
 let startTime = Date.now()
 
-// STEP 3: Telegram pending guard - like his pendingTelegramPairs
-// Key = phone number. If code issued but not connected in 5 min, clearSession.
-// This stops unlinked junk folders piling up, and stops double-pair for same number.
-const pendingTelegramPairs = new Map() // number -> { timer, tgId }
+const pendingTelegramPairs = new Map()
 function watchPendingPair(number, tgId){
   if(pendingTelegramPairs.has(number)){
     clearTimeout(pendingTelegramPairs.get(number).timer)
   }
   const timer = setTimeout(async ()=>{
     pendingTelegramPairs.delete(number)
-    // Only clear if still NOT connected. If connected, pairManager already marked it.
     if(global.subbots?.has(number)) return
     if(global.activeSessions?.get(number)?.connected) return
     try{
@@ -65,6 +59,33 @@ function finishPendingPair(number){
   const p = pendingTelegramPairs.get(number)
   if(p) clearTimeout(p.timer)
   pendingTelegramPairs.delete(number)
+}
+
+// FIX: real truth is activeSessions from pairManager, NOT only global.subbots
+function isReallyConnected(number){
+  if(global.activeSessions?.get(number)?.connected && global.activeSessions?.get(number)?.sock) return true
+  if(global.subbots?.has(number)) return true
+  return false
+}
+function isRegistered(number){
+  try{
+    const c = JSON.parse(fs.readFileSync('./sessions/'+number+'/creds.json','utf8'))
+    return c.registered === true
+  }catch{ return false }
+}
+// FIX: reconnect a saved-but-offline session. Returns true if online.
+async function reconnectSavedSession(number, tgId){
+  if(typeof global.startSession !== 'function'){
+    throw new Error('Engine not ready - global.startSession missing in index.js. Add: global.startSession = startSession')
+  }
+  const sock = await global.startSession(number, tgId, false, global.subbotHooks || {})
+  // Wait for connection.update -> open (max 25s)
+  for(let i=0;i<25;i++){
+    await delay(1000)
+    if(isReallyConnected(number)) return true
+    if(global.activeSessions?.get(number)?.sock && global.activeSessions.get(number).connected) return true
+  }
+  return isReallyConnected(number)
 }
 
 function syncConnectedCount(){ return global.subbots.size }
@@ -164,6 +185,7 @@ async function sendMainMenu(ctx){
 ┃║ ★┌─── ( ᴄᴏᴍᴍᴀɴᴅs )
 ┃║ ★│ ➣ /pair - ${toSmallCaps('CONNECT A NUMBER')}
 ┃║ ★│ ➣ /session - ${toSmallCaps('CHECK YOUR SESSION')}
+┃║ ★│ ➣ /reconnect - ${toSmallCaps('RECONNECT OFFLINE NUMBER')}
 ┃║ ★│ ➣ /disconnect - ${toSmallCaps('DISCONNECT')}
 ┃║ ★│ ➣ /list - ${toSmallCaps('VIEW SESSIONS')}
 ┃║ ★│ ➣ /dev - ${toSmallCaps('CONTACT DEV')}
@@ -251,20 +273,31 @@ async function startTelegram(){
     if(number.startsWith('256') && number.length!==12){
       return ctx.reply(toSmallCaps(`❌ ᴜɢ ɴᴜᴍʙᴇʀ ᴍᴜsᴛ ʙᴇ 12 ᴅɪɢɪᴛs. ᴇx: /ᴘᴀɪʀ ${validExample}`), doReply(ctx))
     }
-    if(global.subbots.has(number)){
+
+    // FIX 1: already ONLINE -> no need to pair
+    if(isReallyConnected(number)){
       return ctx.reply(toSmallCaps(`✅ ${number} IS ALREADY CONNECTED NO NEED TO PAIR AGAIN`), doReply(ctx))
     }
-    const sessPath='./sessions/'+number
-    if(fs.existsSync(sessPath+'/creds.json')){
+
+    // FIX 2: registered BUT OFFLINE -> reconnect, do NOT ask for new code
+    if(isRegistered(number)){
+      saveTgSession(String(ctx.from.id), number)
+      let sMsg = await ctx.reply(toSmallCaps(`🔄 ${number} IS SAVED BUT OFFLINE. RECONNECTING...`), doReply(ctx))
       try{
-        const c=JSON.parse(fs.readFileSync(sessPath+'/creds.json','utf8'))
-        if(c.registered){
-          saveTgSession(String(ctx.from.id), number)
-          return ctx.reply(toSmallCaps(`✅ ${number} WAS PAIRED BEFORE AND IS REGISTERED. USE THE SESSION COMMAND TO CHECK.`), doReply(ctx))
+        const ok = await reconnectSavedSession(number, String(ctx.from.id))
+        if(ok){
+          finishPendingPair(number)
+          setMeta(number,{ connectedAt:Date.now(), pairedAt:Date.now(), isConnected:true })
+          return ctx.reply(toSmallCaps(`✅ ${number} RECONNECTED! NOW TRY .alive ON WHATSAPP`), doReply(ctx))
+        } else {
+          return ctx.reply(toSmallCaps(`⏳ ${number} STILL CONNECTING... WAIT 30s THEN /list. IF STILL OFFLINE USE /reconnect ${number}`), doReply(ctx))
         }
-      }catch(e){ console.log('SESSION READ ERROR:',e.message) }
+      }catch(e){
+        console.log('RECONNECT ERROR', e.message)
+        return ctx.reply(toSmallCaps(`❌ RECONNECT FAILED: ${e.message}. USE /disconnect ${number} THEN /pair AGAIN FOR NEW CODE.`), doReply(ctx))
+      }
     }
-    // STEP 3: Telegram pending guard - NOT global.pairingInProgress anymore
+
     if(pendingTelegramPairs.has(number)){
       return ctx.reply(toSmallCaps(`⏳ ${number} is already pairing, wait for the current request to finish...`), doReply(ctx))
     }
@@ -286,7 +319,6 @@ async function startTelegram(){
         }
       })
       setMeta(number,{ pairedAt:Date.now(), isConnected:false })
-      // Start 5-min expiry now that code is issued
       watchPendingPair(number, String(ctx.from.id))
       const pairMsg = `✅ ${toSmallCaps('pairing code generated')}\n\n📲 ${toSmallCaps('number:')} ${number}\n\n<code>${formatted}</code>\n\n${toSmallCaps('tap and hold the code to copy')}\n${toSmallCaps('open whatsapp > linked devices > link with phone number, and enter this code.')}\n\n${toSmallCaps('⚡ code expires in 5 minutes')}`
       const copyBtn = Markup.inlineKeyboard([[Markup.button.callback(`📋 ${toSmallCaps('copy code')}`, `copy_${formatted}`)]])
@@ -306,6 +338,28 @@ async function startTelegram(){
       } else {
         await ctx.reply(toSmallCaps(`❌ ғᴀɪʟᴇᴅ ᴛᴏ ɢᴇɴᴇʀᴀᴛᴇ ᴄᴏᴅᴇ ғᴏʀ ${number}. try again after 2 mins. make sure number is on whatsapp.`), doReply(ctx))
       }
+    }
+  })
+
+  // NEW TELEGRAM COMMAND: /reconnect
+  bot.command('reconnect', async (ctx)=>{
+    if(ctx.chat.type === 'private' && !await isJoined(ctx)) return sendJoinLock(ctx)
+    let number = (ctx.message.text.split(' ')[1] || '').replace(/[^0-9]/g,'')
+    if(!number){
+      return ctx.reply(toSmallCaps(`❌ usage: /reconnect 256766233041`), doReply(ctx))
+    }
+    if(isReallyConnected(number)){
+      return ctx.reply(toSmallCaps(`✅ ${number} IS ALREADY ONLINE`), doReply(ctx))
+    }
+    if(!isRegistered(number)){
+      return ctx.reply(toSmallCaps(`❌ ${number} HAS NO SAVED SESSION. USE /pair ${number}`), doReply(ctx))
+    }
+    await ctx.reply(toSmallCaps(`🔄 RECONNECTING ${number}...`), doReply(ctx))
+    try{
+      const ok = await reconnectSavedSession(number, String(ctx.from.id))
+      return ctx.reply(toSmallCaps(ok ? `✅ ${number} RECONNECTED! TRY .alive ON WHATSAPP` : `🔴 ${number} STILL OFFLINE. CHECK PANEL LOGS FOR close code:`), doReply(ctx))
+    }catch(e){
+      return ctx.reply(toSmallCaps(`❌ ${e.message}`), doReply(ctx))
     }
   })
 

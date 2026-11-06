@@ -28,6 +28,12 @@ import makeWASocket, { useMultiFileAuthState, Browsers, makeCacheableSignalKeySt
 import pino from 'pino'
 import fs from 'fs'
 import readline from 'readline'
+import { createRequire } from 'module'
+import path from 'path'
+import { fileURLToPath, pathToFileURL } from 'url'
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+const require = createRequire(import.meta.url)
 
 const prefix = '.'
 const commandFolder = './src/commands'
@@ -44,7 +50,6 @@ if(!fs.existsSync(commandFolder)) fs.mkdirSync(commandFolder,{recursive:true})
 global.subbots = new Map()
 global.subbotOwners = []
 global.commands = new Map()
-// DELETED: global.pairingInProgress - now in pairManager as _sessionStarts + sock._pairingInProgress
 global.sessionMeta = new Map()
 global.reconnectTimers = new Map()
 function setMeta(n,d){let o=global.sessionMeta.get(n)||{};global.sessionMeta.set(n,{...o,...d})}
@@ -74,6 +79,53 @@ function saveTgSession(tgId, number){
 global.scheduleAutoAction = scheduleAutoAction;
 global.saveAutoMuteSchedule = saveAutoMuteSchedule;
 
+// FIXED: ESM project - .js files MUST use await import(), .cjs files use require()
+// Old code did require() on .js files, which throws ERR_REQUIRE_ESM and left 0 commands loaded
+async function loadCommands(){
+  global.commands.clear()
+  let failed = []
+  const walk = (dir) => {
+    let out = []
+    try{
+      for(const e of fs.readdirSync(dir, { withFileTypes: true })){
+        const full = path.join(dir, e.name)
+        if(e.isDirectory()) out.push(...walk(full))
+        else if(e.name.endsWith('.js') || e.name.endsWith('.cjs')) out.push(full)
+      }
+    }catch{}
+    return out
+  }
+  try{
+    const files = walk(path.join(__dirname, commandFolder))
+    for(const full of files){
+      const f = path.basename(full)
+      try{
+        let mod = null
+        if(f.endsWith('.cjs')){
+          try{ delete require.cache[require.resolve(full)] }catch{}
+          mod = require(full)
+        }else{
+          const url = pathToFileURL(full).href + `?t=${Date.now()}-${Math.random()}`
+          mod = await import(url)
+        }
+        const cmd = mod?.default || mod
+        if(cmd?.name && typeof cmd.execute === 'function'){
+          global.commands.set(String(cmd.name).toLowerCase(), cmd)
+          if(Array.isArray(cmd.aliases)) cmd.aliases.forEach(a=>global.commands.set(String(a).toLowerCase(), cmd))
+          else if(Array.isArray(cmd.alias)) cmd.alias.forEach(a=>global.commands.set(String(a).toLowerCase(), cmd))
+        } else {
+          failed.push(`${f}: no name/execute`)
+        }
+      }catch(e){ failed.push(`${f}: ${e.message}`) }
+    }
+  }catch(e){ console.log('Command load error '+e.message) }
+  console.log(C+`Loaded ${global.commands.size} WhatsApp commands`+R)
+  if(failed.length) console.log(Y+`Failed ${failed.length} commands: ${failed.slice(0,10).join(' | ')}`+R)
+  if(global.commands.size === 0) console.log(Rd+`⚠️ 0 COMMANDS LOADED - check src/commands/ format!`+R)
+  return global.commands
+}
+global.loadCommands = loadCommands
+
 function createMessageHandler(sock, isSubBotSession = false){
   const msgCache = new Map()
   return async ({messages})=>{
@@ -85,7 +137,7 @@ function createMessageHandler(sock, isSubBotSession = false){
         let isGroup=remoteJid.endsWith('@g.us')
         let sender=isGroup? (msg.key.participant || msg.participant || remoteJid) : (msg.key.remoteJid)
         if(msg.key.fromMe){
-          sender = sock.user.id.split(':')[0]+'@s.whatsapp.net'
+          sender = sock.user?.id?.split(':')[0]+'@s.whatsapp.net'
         }
         let senderNum=sender.split('@')[0]
         let botIdNum=(sock.user?.id?.split(':')[0].split('@')[0])||""
@@ -188,7 +240,7 @@ function createMessageHandler(sock, isSubBotSession = false){
         let args=body.slice(dynamicPrefix.length).trim().split(/ +/)
         let name=args.shift().toLowerCase()
         let cmd=global.commands.get(name)
-        if(!cmd) continue
+        if(!cmd){ console.log(`[CMD] Unknown: .${name} from ${senderNum} | loaded=${global.commands.size} | mode=${mode} | prefix=${dynamicPrefix}`); continue }
         let mObj={}
         mObj.key=msg.key
         mObj.chat=remoteJid
@@ -213,6 +265,7 @@ function createMessageHandler(sock, isSubBotSession = false){
           mObj.quoted.mtype=Object.keys(ctxInfo.quotedMessage)[0]
           mObj.quoted.msg=mObj.quoted.message[mObj.quoted.mtype]
         }
+        console.log(`[CMD] .${name} from ${senderNum} on ${isSubBotSession?'SUBBOT':'MAIN'} ${botIdNum}`)
         await cmd.execute(sock,mObj,args)
       }catch(e){
         console.log('upsert per-msg error', e.message)
@@ -230,7 +283,6 @@ global.delay = delay;
 global.runtime = runtime;
 global.fmtTime = fmtTime;
 
-// ── STEP 2: subbot hooks - pairManager owns socket, STORM owns what to do ──
 const _pendingOnConnected = new Map()
 const subbotHooks = {
   onMessage: (sock) => createMessageHandler(sock, true),
@@ -270,16 +322,12 @@ global.getPairingCode = getPairingCode
 let mainRetries = 0
 let mainReconnectTimer = null
 
-// REPLACED: was creating its own socket + its own close logic
-// Now just calls pairManager.startSession - one socket per number
 async function startSubBotSession(phoneNumber){
   global.startSubBotSession = startSubBotSession
   const id = String(phoneNumber).replace(/[^0-9]/g,'')
   return startSession(id, null, false, subbotHooks)
 }
 
-// REPLACED: was creating its own socket, deleting folder, 25s timeout, 3s delay, own pairingTimeout
-// Now: startSession (reuse / clear incomplete) + getPairingCode (1500ms wait, 65s timeout)
 global.requestPairFromEngine = async (number, { onConnected } = {}) => {
   const id = String(number).replace(/[^0-9]/g,'')
   if(global.subbots.has(id)) throw new Error('already connected')
@@ -287,7 +335,6 @@ global.requestPairFromEngine = async (number, { onConnected } = {}) => {
   if(typeof onConnected === 'function') _pendingOnConnected.set(id, onConnected)
   try{
     const sock = await startSession(id, null, false, subbotHooks)
-    // If startSession reused an already-connected socket, don't give a code
     if(sock?.user?.id || activeSessions.get(id)?.connected) throw new Error('already connected')
     const code = await getPairingCode(sock, id)
     setMeta(id,{pairedAt:Date.now(),isConnected:false})
@@ -300,8 +347,6 @@ global.requestPairFromEngine = async (number, { onConnected } = {}) => {
 
 async function startAllSubBots(){
   global.startAllSubBots = startAllSubBots
-  // REPLACED: was looping folders + startSubBotSession (2nd socket risk)
-  // Now: resumeSessions skips unregistered folders, reuses pairManager
   await resumeSessions(subbotHooks)
 }
 
@@ -357,10 +402,6 @@ async function startWhatsApp(){
       mainReconnectTimer = setTimeout(startWhatsApp, backoff)
     }
   })
-  try{
-    const files=fs.readdirSync(commandFolder)
-    for(const f of files){ if(!f.endsWith('.js')) continue; try{ const mod=await import(commandFolder+'/'+f+'?v='+Date.now()); if(mod.default?.name){ global.commands.set(mod.default.name.toLowerCase(),mod.default); if(mod.default.alias) mod.default.alias.forEach(a=>global.commands.set(a.toLowerCase(),mod.default)) } }catch(e){ console.log(`Failed ${f}: ${e.message}`) } }
-  }catch(e){ console.log('Command load error '+e.message) }
   console.log(C+`Loaded ${global.commands.size} WhatsApp commands`+R)
   sock.ev.on('messages.upsert', createMessageHandler(sock, false))
   sock.ev.on('group-participants.update', async (anu)=>{
@@ -370,13 +411,14 @@ async function startWhatsApp(){
     await handleAutokick(sock, anu, botId);
     await handleAntipromote(sock, anu, botId);
     await handleAntidemote(sock, anu, botId);
-   }catch(e){ console.log('group update err', e.message); }
+   }catch(e){ console.log('group update err', e.message) }
   });
   await delay(3000)
   startAllSubBots()
 }
 
 async function safeStart(){
+  await loadCommands()
   try{ await startTelegram() }catch(e){ console.log(Rd+'Telegram start failed: '+e.message+R) }
   try{ await startPairServer() }catch(e){ console.log(Rd+'PairServer start failed: '+e.message+R) }
   try{ await startWhatsApp() }catch(e){ console.log(Rd+'WhatsApp start failed: '+e.message+R); setTimeout(startWhatsApp,5000) }

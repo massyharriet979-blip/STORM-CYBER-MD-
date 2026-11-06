@@ -2,32 +2,60 @@ import fs from 'fs'
 
 function toSmallCaps(text){
   const map = {a:'ᴀ',b:'ʙ',c:'ᴄ',d:'ᴅ',e:'ᴇ',f:'ғ',g:'ɢ',h:'ʜ',i:'ɪ',j:'ᴊ',k:'ᴋ',l:'ʟ',m:'ᴍ',n:'ɴ',o:'ᴏ',p:'ᴘ',q:'ǫ',r:'ʀ',s:'s',t:'ᴛ',u:'ᴜ',v:'ᴠ',w:'ᴡ',x:'x',y:'ʏ',z:'ᴢ'}
-  return text.toLowerCase().split('').map(c=>map[c]||c).join('')
+  return String(text||'').toLowerCase().split('').map(c=>map[c]||c).join('')
 }
 function doReply(ctx){
-  try{ if(ctx.message) return { reply_parameters: { message_id: ctx.message.message_id } } }catch{}
+  try{ if(ctx.message) return { reply_parameters: { message_id: ctx.message.message_id } }catch{}
   return {}
-}
-const delay = (ms) => new Promise(r=>setTimeout(r,ms))
-
-function countUsers(){
-  try{
-    return fs.readdirSync('./sessions').filter(d=>{
-      try{
-        const file='./sessions/'+d+'/creds.json'
-        if(!fs.existsSync(file)) return false
-        const creds=JSON.parse(fs.readFileSync(file,'utf8'))
-        return creds.registered === true
-      }catch{ return false }
-    }).length
-  }catch{ return 0 }
 }
 
 export async function usersCommand(ctx){
-  const chk=await ctx.reply(toSmallCaps(`🔎 requesting server information...`), doReply(ctx))
-  await delay(700)
-  const total=countUsers()
-  const connNow=global.subbots?.size||0
-  const txt=`👥 ᴜsᴇʀs:\n𝙿𝙰𝙸𝚁𝙴𝙳: ${total}\n𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${connNow}\n𝙳𝙸𝚂𝙲𝙾𝙽𝙽𝙴𝙲𝚃𝙴𝙳: ${Math.max(0,total-connNow)}`
-  try{ await ctx.telegram.editMessageText(ctx.chat.id,chk.message_id,null,txt) }catch{ await ctx.reply(txt, doReply(ctx)) }
+  // GLOBAL - all folders on server, not just this user
+  let folders = []
+  try{ folders = fs.readdirSync('./sessions').filter(d => /^\d+$/.test(d)) }catch{ folders = [] }
+
+  let paired = 0
+  let connected = 0
+  let disconnected = 0
+
+  for(let n of folders){
+    let registered = false
+    try{ registered = JSON.parse(fs.readFileSync('./sessions/'+n+'/creds.json','utf8')).registered === true }catch{}
+    if(!registered) continue
+    paired++
+    const s = global.activeSessions?.get(n)
+    const online = (s?.connected && s?.sock) || global.subbots?.has(n)
+    if(online) connected++
+    else disconnected++
+  }
+
+  // How many different Telegram users have ever paired
+  let tgUsers = 0
+  try{
+    const db = JSON.parse(fs.readFileSync('./database/telegram_sessions.json','utf8'))
+    tgUsers = Object.keys(db).length
+  }catch{ tgUsers = 0 }
+
+  // Server uptime - real from global.runtime if bot.js set it, else process.uptime
+  let upStr = 'unknown'
+  try{
+    if(typeof global.runtime === 'function'){ const r = global.runtime(); upStr = `${r.d}d ${r.h}h ${r.m}m ${r.s}s` }
+    else { const s = Math.floor(process.uptime()); upStr = `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m ${s%60}s` }
+  }catch{}
+
+  const msg = `👥 ${toSmallCaps('sᴛᴏʀᴍ ᴄʏʙᴇʀ ᴍᴅ - ᴜsᴇʀs')}\n\n` +
+    `┌────────( ${toSmallCaps('global stats')} )\n` +
+    `│ ➣ ${toSmallCaps('telegram users')} : ${tgUsers}\n` +
+    `│ ➣ ${toSmallCaps('paired numbers')} : ${paired}\n` +
+    `│ ➣ ${toSmallCaps('online now')} : 🟢 ${connected}\n` +
+    `│ ➣ ${toSmallCaps('offline')} : 🔴 ${disconnected}\n` +
+    `└────────\n\n` +
+    `┌────────( ${toSmallCaps('server')} )\n` +
+    `│ ➣ ${toSmallCaps('server')} : ${toSmallCaps('server 1 of 1')}\n` +
+    `│ ➣ ${toSmallCaps('server up')} : ${toSmallCaps(upStr)}\n` +
+    `│ ➣ ${toSmallCaps('status')} : ${toSmallCaps('server(s) ready')}\n` +
+    `└────────\n\n` +
+    `${toSmallCaps('ᴜsᴇ /list ᴛᴏ sᴇᴇ ʏᴏᴜʀ ᴏᴡɴ ɴᴜᴍʙᴇʀs.')}`
+
+  return ctx.reply(msg, doReply(ctx))
 }
