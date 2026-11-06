@@ -87,12 +87,34 @@ export async function clearSession(phone) {
   return true
 }
 
+// FIX FOR SUBBOTS: hooks.onMessage is a factory (sock) => handler, NOT a handler.
+// Call it once with sock, attach returned handler once. Guard stops double-reply.
+function attachHooks(sock, hooks = {}) {
+  if (!sock || !hooks) return
+  try {
+    if (hooks.onMessage && !sock._stormHandlerAttached) {
+      const handler = hooks.onMessage(sock)
+      if (typeof handler === 'function') {
+        sock._stormHandlerAttached = true
+        sock.ev.on('messages.upsert', handler)
+      }
+    }
+    if (hooks.onGroupUpdate && !sock._stormGroupAttached) {
+      sock._stormGroupAttached = true
+      sock.ev.on('group-participants.update', (anu) => hooks.onGroupUpdate(sock, anu, sock._sessionPhone))
+    }
+  } catch (e) { console.log('[pairManager] attachHooks err', e.message) }
+}
+
 export async function startSession(phone, tgChatId = null, forceNew = false, hooks = {}) {
   const existing = activeSessions.get(phone)
   const alreadyRegistered = hasRegisteredCredentials(phone) || existing?.registered === true
 
   // 1. Fully registered -> reuse, don't create 2nd socket
+  // FIX: attach hooks on reuse too, otherwise reused socket has no commands
   if (!forceNew && existing?.sock && alreadyRegistered && !existing.sock._pairingInProgress) {
+    if (tgChatId) existing.tgChatId = tgChatId
+    attachHooks(existing.sock, hooks)
     return existing.sock
   }
 
@@ -164,8 +186,8 @@ async function _createSession(phone, tgChatId = null, hooks = {}) {
   sock.ev.on('creds.update', saveCreds)
 
   // Hooks from index.js - so pairManager stays clean, STORM handlers live in index.js
-  if (hooks.onMessage) sock.ev.on('messages.upsert', hooks.onMessage(sock))
-  if (hooks.onGroupUpdate) sock.ev.on('group-participants.update', (anu) => hooks.onGroupUpdate(sock, anu, phone))
+  // FIX: use attachHooks() with guard, not direct ev.on
+  attachHooks(sock, hooks)
 
   sock.ev.on('connection.update', async ({ connection, lastDisconnect }) => {
     if (connection === 'open') {
@@ -184,6 +206,8 @@ async function _createSession(phone, tgChatId = null, hooks = {}) {
         disconnectedSince: null
       })
       console.log(`✅ STORM SUBBOT ${phone} CONNECTED`)
+      // FIX: re-attach on open, in case socket was recreated by Baileys internally
+      attachHooks(sock, hooks)
       if (hooks.onOpen) await hooks.onOpen(sock, phone).catch(() => {})
       return
     }
