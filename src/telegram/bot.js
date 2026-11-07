@@ -38,19 +38,24 @@ if(!global.subbotOwners) global.subbotOwners = []
 if(!global.sessionMeta) global.sessionMeta = new Map()
 let startTime = Date.now()
 
+// --- SAME CLEANING AS pairManager + web ---
+const digits = (s) => String(s || '').replace(/[^0-9]/g, '')
+function cleanPhone(n) {
+  let id = digits(n)
+  if (id.startsWith('0')) id = id.slice(1)
+  return id
+}
+
 const pendingTelegramPairs = new Map()
 function watchPendingPair(number, tgId){
+  // FIX: NO AUTO-DELETE. After 5 min we just forget the pending flag.
+  // We NEVER call clearSession here. Folder stays until user does /disconnect.
   if(pendingTelegramPairs.has(number)){
     clearTimeout(pendingTelegramPairs.get(number).timer)
   }
   const timer = setTimeout(async ()=>{
     pendingTelegramPairs.delete(number)
-    if(global.subbots?.has(number)) return
-    if(global.activeSessions?.get(number)?.connected) return
-    try{
-      if(typeof global.clearSession === 'function') await global.clearSession(number)
-      console.log(`[Telegram] Pair expired for ${number} - cleared`)
-    }catch(e){ console.log('pair expiry clear err', e.message) }
+    console.log(`[Telegram] Pair expired for ${number} - pending cleared, SESSION KEPT (not deleted)`)
   }, 5 * 60 * 1000)
   if(timer.unref) timer.unref()
   pendingTelegramPairs.set(number, { timer, tgId })
@@ -69,24 +74,13 @@ function isReallyConnected(number){
 }
 function isRegistered(number){
   try{
-    const c = JSON.parse(fs.readFileSync('./sessions/'+number+'/creds.json','utf8'))
+    const clean = cleanPhone(number)
+    const c = JSON.parse(fs.readFileSync('./sessions/'+clean+'/creds.json','utf8'))
     return c.registered === true
   }catch{ return false }
 }
-// FIX: reconnect a saved-but-offline session. Returns true if online.
-async function reconnectSavedSession(number, tgId){
-  if(typeof global.startSession !== 'function'){
-    throw new Error('Engine not ready - global.startSession missing in index.js. Add: global.startSession = startSession')
-  }
-  const sock = await global.startSession(number, tgId, false, global.subbotHooks || {})
-  // Wait for connection.update -> open (max 25s)
-  for(let i=0;i<25;i++){
-    await delay(1000)
-    if(isReallyConnected(number)) return true
-    if(global.activeSessions?.get(number)?.sock && global.activeSessions.get(number).connected) return true
-  }
-  return isReallyConnected(number)
-}
+// DELETED: reconnectSavedSession - NO AUTO-RECONNECT. User decides.
+// DELETED: /reconnect command - removed completely.
 
 function syncConnectedCount(){ return global.subbots.size }
 function getConnected(){ return global.subbots.size }
@@ -185,7 +179,6 @@ async function sendMainMenu(ctx){
 ┃║ ★┌─── ( ᴄᴏᴍᴍᴀɴᴅs )
 ┃║ ★│ ➣ /pair - ${toSmallCaps('CONNECT A NUMBER')}
 ┃║ ★│ ➣ /session - ${toSmallCaps('CHECK YOUR SESSION')}
-┃║ ★│ ➣ /reconnect - ${toSmallCaps('RECONNECT OFFLINE NUMBER')}
 ┃║ ★│ ➣ /disconnect - ${toSmallCaps('DISCONNECT')}
 ┃║ ★│ ➣ /list - ${toSmallCaps('VIEW SESSIONS')}
 ┃║ ★│ ➣ /dev - ${toSmallCaps('CONTACT DEV')}
@@ -261,7 +254,7 @@ async function startTelegram(){
   bot.command('pair', async (ctx)=>{
     if(ctx.chat.type === 'private' && !await isJoined(ctx)) return sendJoinLock(ctx)
     let raw = ctx.message.text.split(' ')[1] || ''
-    let number = raw.replace(/[^0-9]/g,'')
+    let number = cleanPhone(raw)
     const validExample = '256766233041'
 
     if(!number || number.length < 10 || number.length > 15){
@@ -279,23 +272,11 @@ async function startTelegram(){
       return ctx.reply(toSmallCaps(`✅ ${number} IS ALREADY CONNECTED NO NEED TO PAIR AGAIN`), doReply(ctx))
     }
 
-    // FIX 2: registered BUT OFFLINE -> reconnect, do NOT ask for new code
+    // FIX 2: registered BUT OFFLINE -> DO NOT AUTO-RECONNECT, DO NOT DELETE
+    // Just tell user session exists. Only /disconnect deletes it.
     if(isRegistered(number)){
       saveTgSession(String(ctx.from.id), number)
-      let sMsg = await ctx.reply(toSmallCaps(`🔄 ${number} IS SAVED BUT OFFLINE. RECONNECTING...`), doReply(ctx))
-      try{
-        const ok = await reconnectSavedSession(number, String(ctx.from.id))
-        if(ok){
-          finishPendingPair(number)
-          setMeta(number,{ connectedAt:Date.now(), pairedAt:Date.now(), isConnected:true })
-          return ctx.reply(toSmallCaps(`✅ ${number} RECONNECTED! NOW TRY .alive ON WHATSAPP`), doReply(ctx))
-        } else {
-          return ctx.reply(toSmallCaps(`⏳ ${number} STILL CONNECTING... WAIT 30s THEN /list. IF STILL OFFLINE USE /reconnect ${number}`), doReply(ctx))
-        }
-      }catch(e){
-        console.log('RECONNECT ERROR', e.message)
-        return ctx.reply(toSmallCaps(`❌ RECONNECT FAILED: ${e.message}. USE /disconnect ${number} THEN /pair AGAIN FOR NEW CODE.`), doReply(ctx))
-      }
+      return ctx.reply(toSmallCaps(`ℹ️ ${number} HAS A SAVED SESSION BUT IS OFFLINE (LOGGED OUT / DISCONNECTED). SESSION IS KEPT, NOT DELETED. USE /session TO CHECK IT. IF YOU WANT A NEW CODE, USE /disconnect ${number} FIRST, THEN /pair ${number} AGAIN.`), doReply(ctx))
     }
 
     if(pendingTelegramPairs.has(number)){
@@ -341,27 +322,7 @@ async function startTelegram(){
     }
   })
 
-  // NEW TELEGRAM COMMAND: /reconnect
-  bot.command('reconnect', async (ctx)=>{
-    if(ctx.chat.type === 'private' && !await isJoined(ctx)) return sendJoinLock(ctx)
-    let number = (ctx.message.text.split(' ')[1] || '').replace(/[^0-9]/g,'')
-    if(!number){
-      return ctx.reply(toSmallCaps(`❌ usage: /reconnect 256766233041`), doReply(ctx))
-    }
-    if(isReallyConnected(number)){
-      return ctx.reply(toSmallCaps(`✅ ${number} IS ALREADY ONLINE`), doReply(ctx))
-    }
-    if(!isRegistered(number)){
-      return ctx.reply(toSmallCaps(`❌ ${number} HAS NO SAVED SESSION. USE /pair ${number}`), doReply(ctx))
-    }
-    await ctx.reply(toSmallCaps(`🔄 RECONNECTING ${number}...`), doReply(ctx))
-    try{
-      const ok = await reconnectSavedSession(number, String(ctx.from.id))
-      return ctx.reply(toSmallCaps(ok ? `✅ ${number} RECONNECTED! TRY .alive ON WHATSAPP` : `🔴 ${number} STILL OFFLINE. CHECK PANEL LOGS FOR close code:`), doReply(ctx))
-    }catch(e){
-      return ctx.reply(toSmallCaps(`❌ ${e.message}`), doReply(ctx))
-    }
-  })
+  // DELETED: bot.command('reconnect') - NO RECONNECT AT ALL
 
   bot.command('session', sessionCommand)
   bot.command('list', listCommand)

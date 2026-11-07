@@ -1,111 +1,288 @@
-import express from 'express'
-import cors from 'cors'
+import pino from 'pino'
 import fs from 'fs'
+import path from 'path'
+// STORM-CYBER-MD — Pair Manager
+// One place owns ALL sockets. Telegram + Web both call startSession().
+// RULE: NEVER auto-delete, NEVER auto-reconnect.
+// Only /disconnect / clearSession deletes. User decides.
+// Logged out = kept, marked offline. /session will still find it.
 
-const app = express()
-app.use(cors({origin:'*'})); app.use(express.json())
-const PORT = process.env.PORT || process.env.SERVER_PORT || 2505
-// DELETED: tempSockets - no more ./temp_pair/ socket, no more copy on open
-// DELETED: makeWASocket import - Web never creates socket anymore, engine does
+import makeWASocket, {
+  useMultiFileAuthState,
+  DisconnectReason,
+  fetchLatestBaileysVersion,
+  makeCacheableSignalKeyStore,
+  Browsers
+} from '@whiskeysockets/baileys'
 
-function statusOf(n){
-  const id=(n||'').replace(/[^0-9]/g,'')
-  if(!id) return {paired:false,connected:false,message:"NUMBER REQUIRED"}
-  const credsExists=fs.existsSync(`./sessions/${id}/creds.json`)
-  const connected=global.subbots?.has(id)
-  const meta=global.sessionMeta?.get(id)
-  const isConn = connected || (meta && meta.isConnected)
+const SESSIONS_ROOT = path.join(process.cwd(), 'sessions')
+if (!fs.existsSync(SESSIONS_ROOT)) fs.mkdirSync(SESSIONS_ROOT, { recursive: true })
 
-  if(!credsExists){
-    return {number:id, paired:false, connected:false, status:"not_paired", message:`${id} IS NOT PAIRED YET. NO NEED TO CHECK.`}
+export const activeSessions = new Map() // phone -> { sock, tgChatId, retries, connected, registered, reconnectTimer }
+const _sessionStarts = new Map() // phone -> Promise<sock> - prevents double start
+
+let _baileysVersion = null
+async function getBaileysVersion() {
+  if (_baileysVersion) return _baileysVersion
+  try {
+    const { version } = await fetchLatestBaileysVersion()
+    _baileysVersion = version
+    return version
+  } catch {
+    _baileysVersion = [2, 3000, 1023223821]
+    return _baileysVersion
   }
-  if(credsExists && !isConn){
-    return {number:id, paired:true, connected:false, status:"paired_not_connected", message:`YOUR ${id} IS PAIRED BUT YOUR NUMBER IS NOT CONNECTED`}
-  }
-  return {number:id, paired:true, connected:true, status:"running", message:`${id} IS RUNNING SMOOTHLY IN WHATSAPP.`}
 }
 
-app.get('/', (req,res)=>{ res.send('STORM PAIR ONLINE - '+PORT) })
+// --- SQUICHY NUMBER CLEANING ---
+const digits = (s) => String(s || '').replace(/[^0-9]/g, '')
 
-app.get('/api/stats',(req,res)=>{
-  try{
-    const dirs=fs.existsSync('./sessions')?fs.readdirSync('./sessions').filter(d=>fs.existsSync(`./sessions/${d}/creds.json`)):[]
-    res.json({total:dirs.length, connected:global.subbots?.size||0, disconnected:dirs.length-(global.subbots?.size||0), paired:dirs.length})
-  }catch{ res.json({total:0, connected:0, disconnected:0, paired:0}) }
-})
+export function cleanPhone(phone) {
+  let n = digits(phone)
+  if (n.startsWith('0')) n = n.slice(1) // no leading 0
+  return n
+}
 
-app.post('/api/status',(req,res)=>{
-  const num = req.body.number || req.query.number || ''
-  res.json(statusOf(num))
-})
+export function hasRegisteredCredentials(phone) {
+  try {
+    const clean = cleanPhone(phone)
+    const file = path.join(SESSIONS_ROOT, clean, 'creds.json')
+    return JSON.parse(fs.readFileSync(file, 'utf8')).registered === true
+  } catch { return false }
+}
 
-app.get('/api/status',(req,res)=>{
-  const num = req.query.number || ''
-  res.json(statusOf(num))
-})
+export function formatPairingCode(code) {
+  const clean = String(code || '').replace(/[^a-z0-9]/gi, '').toUpperCase()
+  return clean.match(/.{1,4}/g)?.join('-') || clean
+}
 
-app.post('/api/pair',async(req,res)=>{
-  try{
-    let id=(req.body.number||'').replace(/[^0-9]/g,'')
-    if(!id) return res.status(400).json({error:"NUMBER REQUIRED"})
-    if(global.subbots?.has(id)) return res.json({status:"ALREADY_CONNECTED", ...statusOf(id)})
-    // DELETED: global.pairingInProgress check - pairManager handles double-start via _sessionStarts
-    const mainNum = (process.env.MAIN_NUMBER||'').replace(/[^0-9]/g,'')
-    if(mainNum && id === mainNum) return res.status(400).json({error:"CANNOT PAIR MAIN BOT NUMBER"})
-
-    if(typeof global.requestPairFromEngine !== 'function'){
-      return res.status(500).json({error:"ENGINE NOT READY - RESTART BOT"})
+// --- SQUICHY PAIR PATTERN ---
+// Wait 3000ms, request ONCE with clean number, timeout 25s, clear flag always
+export function getPairingCode(sock, phone, mode = 'normal') {
+  return new Promise((resolve, reject) => {
+    const clean = cleanPhone(phone)
+    if (clean.length < 8 || clean.length > 15) {
+      return reject(new Error('Invalid number — country code first, no leading 0, no +, no spaces. Example: 256772123456'))
     }
-
-    // STEP 4: Web now uses SAME engine as Telegram - startSession + getPairingCode
-    // No temp_pair, no 2nd socket, no copy on open.
-    // If user does not enter code in 5 min, Telegram pending expiry / next startSession clears it.
-    // Web does NOT auto-delete on timeout - next /pair will clear incomplete via startSession.
-    const formatted = await global.requestPairFromEngine(id, {
-      onConnected: () => {
-        console.log(`✅ WEB PAIR CONNECTED ${id}`)
-      }
-    })
-
-    res.json({status:"CODE_SENT", code:formatted, copy:formatted.replace(/-/g,''), formatted:formatted, number:id, message:"CODE GENERATED - ENTER IT IN WHATSAPP"})
-  }catch(e){
-    const nid=(req.body.number||'').replace(/[^0-9]/g,'');
-    const msg = String(e.message || '').toUpperCase()
-    // Map engine errors to your old Web messages
-    if(msg.includes('ALREADY CONNECTED') || msg.includes('ALREADY REGISTERED')){
-      return res.json({status:"ALREADY_CONNECTED", ...statusOf(nid)})
+    const TIMEOUT_MS = 25_000 // code dies at ~20s, don't wait 65s
+    let settled = false
+    sock._pairingInProgress = true
+    const settle = (err, code) => {
+      if (settled) return
+      settled = true
+      sock._pairingInProgress = false // clear on success AND error
+      clearTimeout(timer)
+      if (err) reject(err)
+      else resolve(code)
     }
-    if(msg.includes('ALREADY PAIRING')){
-      return res.json({status:"PAIRING_IN_PROGRESS",message:"WAIT 60S - PAIRING IN PROGRESS FOR THIS NUMBER"})
-    }
-    res.status(500).json({error:msg})
+    const timer = setTimeout(() => {
+      settle(new Error('Timed out — code expired. Request a new code.'))
+    }, TIMEOUT_MS)
+    setTimeout(() => {
+      sock.requestPairingCode(clean)
+        .then(c => {
+          if (!c) return settle(new Error('WhatsApp returned an empty code.'))
+          settle(null, formatPairingCode(c))
+        })
+        .catch(e => settle(e))
+    }, 3000) // 3000ms like Squichy - let socket connect first
+  })
+}
+
+// ONLY place that deletes. Called ONLY from /disconnect (Telegram + Web).
+// NEVER called automatically on close / logout / timeout / expiry.
+export async function clearSession(phone) {
+  phone = cleanPhone(phone)
+  const session = activeSessions.get(phone)
+  if (session) {
+    if (session.reconnectTimer) clearTimeout(session.reconnectTimer)
+    if (session.sock?._presenceInterval) clearInterval(session.sock._presenceInterval)
+    try { session.sock?.end?.() } catch {}
   }
-})
+  activeSessions.delete(phone)
+  _sessionStarts.delete(phone)
+  const dir = path.join(SESSIONS_ROOT, phone)
+  try { fs.rmSync(dir, { recursive: true, force: true }) } catch {}
+  return true
+}
 
-app.post('/api/disconnect',async (req,res)=>{
-  const id=(req.body.number||'').replace(/[^0-9]/g,'');
-  if(!id) return res.status(400).json({error:"NUMBER REQUIRED"})
-  try{
-    // Use pairManager clearSession - closes socket + clears timers + deletes folder
-    if(typeof global.clearSession === 'function'){
-      await global.clearSession(id)
-    } else {
-      try{global.subbots?.get(id)?.ws?.close()}catch{}
-      try{global.subbots?.delete(id)}catch{}
+function attachHooks(sock, hooks = {}) {
+  if (!sock || !hooks) return
+  try {
+    if (hooks.onMessage && !sock._stormHandlerAttached) {
+      const handler = hooks.onMessage(sock)
+      if (typeof handler === 'function') {
+        sock._stormHandlerAttached = true
+        sock.ev.on('messages.upsert', handler)
+      }
     }
-  }catch{}
-  try{
-    if(global.reconnectTimers?.has(id)){
-      clearTimeout(global.reconnectTimers.get(id))
-      global.reconnectTimers.delete(id)
+    if (hooks.onGroupUpdate && !sock._stormGroupAttached) {
+      sock._stormGroupAttached = true
+      sock.ev.on('group-participants.update', (anu) => hooks.onGroupUpdate(sock, anu, sock._sessionPhone))
     }
-  }catch{}
-  try{ if(global.sessionMeta?.has(id)) global.sessionMeta.delete(id) }catch{}
-  // clearSession already deleted ./sessions/${id}, but keep fallback if old path used
-  if(fs.existsSync(`./sessions/${id}`) && typeof global.clearSession !== 'function') fs.rmSync(`./sessions/${id}`,{recursive:true,force:true});
-  // Clean any leftover temp_pair from OLD version
-  if(fs.existsSync(`./temp_pair/${id}`)) fs.rmSync(`./temp_pair/${id}`,{recursive:true,force:true});
-  res.json({success:true, message:`${id} DISCONNECTED SUCCESSFULLY`})
-})
+  } catch (e) { console.log('[pairManager] attachHooks err', e.message) }
+}
 
-export function startPairServer(){ app.listen(PORT, '0.0.0.0', ()=>console.log(`✅ PAIR SERVER ONLINE ${PORT}`)) }
+export async function startSession(phone, tgChatId = null, forceNew = false, hooks = {}) {
+  phone = cleanPhone(phone)
+  const existing = activeSessions.get(phone)
+  const alreadyRegistered = hasRegisteredCredentials(phone) || existing?.registered === true
+
+  // 1. Fully registered -> reuse, don't create 2nd socket
+  if (!forceNew && existing?.sock && alreadyRegistered && !existing.sock._pairingInProgress) {
+    if (tgChatId) existing.tgChatId = tgChatId
+    attachHooks(existing.sock, hooks)
+    return existing.sock
+  }
+
+  // 2. Incomplete pairing (NEVER registered) -> clear for fresh code
+  // This is NOT a real session yet, so clearing it is safe.
+  // Registered / loggedOut sessions are NOT cleared here - they are kept.
+  if (!forceNew && existing && !alreadyRegistered) {
+    console.log(`[${phone}] Incomplete pairing (never registered) — clearing for fresh code`)
+    await clearSession(phone)
+    await new Promise(r => setTimeout(r, 600))
+  }
+
+  // 3. Explicit force new - only from /disconnect flow, not automatic
+  if (forceNew) {
+    console.log(`[${phone}] Force new — clearing old session`)
+    await clearSession(phone)
+    await new Promise(r => setTimeout(r, 800))
+  }
+
+  // Prevent double start - second call returns same promise
+  const inFlight = _sessionStarts.get(phone)
+  if (inFlight && !forceNew) return inFlight
+
+  const promise = _createSession(phone, tgChatId, hooks)
+  _sessionStarts.set(phone, promise)
+  try {
+    return await promise
+  } finally {
+    if (_sessionStarts.get(phone) === promise) _sessionStarts.delete(phone)
+  }
+}
+
+async function _createSession(phone, tgChatId = null, hooks = {}) {
+  phone = cleanPhone(phone)
+  const sessionDir = path.join(SESSIONS_ROOT, phone)
+  fs.mkdirSync(sessionDir, { recursive: true })
+
+  const { state, saveCreds } = await useMultiFileAuthState(sessionDir)
+  const version = await getBaileysVersion()
+
+  const sock = makeWASocket({
+    version,
+    logger: pino({ level: 'silent' }),
+    browser: Browsers.ubuntu('Chrome'),
+    auth: {
+      creds: state.creds,
+      keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' }))
+    },
+    syncFullHistory: false,
+    markOnlineOnConnect: false,
+    connectTimeoutMs: 60000,
+    keepAliveIntervalMs: 15000,
+    defaultQueryTimeoutMs: 60000,
+    emitOwnEvents: false,
+    generateHighQualityLinkPreview: false,
+    getMessage: async () => ({ conversation: ' ' })
+  })
+
+  sock._sessionPhone = phone
+  activeSessions.set(phone, {
+    sock,
+    tgChatId,
+    retries: 0,
+    connected: false,
+    registered: Boolean(state.creds?.registered),
+    reconnectTimer: null,
+    disconnectedSince: null
+  })
+
+  sock.ev.on('creds.update', saveCreds)
+  attachHooks(sock, hooks)
+
+  sock.ev.on('connection.update', async ({ connection, lastDisconnect }) => {
+    if (connection === 'open') {
+      const current = activeSessions.get(phone)
+      if (!current || current.sock !== sock) return
+      sock._pairingInProgress = false
+      if (current.reconnectTimer) clearTimeout(current.reconnectTimer)
+      activeSessions.set(phone, {
+        ...current,
+        sock,
+        tgChatId,
+        connected: true,
+        registered: true,
+        retries: 0,
+        reconnectTimer: null,
+        disconnectedSince: null
+      })
+      console.log(`✅ STORM SUBBOT ${phone} CONNECTED`)
+      attachHooks(sock, hooks)
+      if (hooks.onOpen) await hooks.onOpen(sock, phone).catch(() => {})
+      return
+    }
+
+    if (connection === 'close') {
+      if (sock._presenceInterval) {
+        clearInterval(sock._presenceInterval)
+        sock._presenceInterval = null
+      }
+      const current = activeSessions.get(phone)
+      if (!current || current.sock !== sock) return
+      const code = lastDisconnect?.error?.output?.statusCode
+      console.log(`[${phone}] close code:${code} msg:${lastDisconnect?.error?.message || ''} — KEEPING SESSION, NO AUTO-RECONNECT, NO DELETE`)
+
+      // DELETED: 515 auto-reconnect
+      // DELETED: loggedOut / 401 auto-delete
+      // DELETED: retries / backoff / auto startSession
+      // DELETED: max retries / 8 min timer
+      // ALL REMOVED. Server just marks offline and stops.
+      // Only user /disconnect deletes. Only user /pair starts again.
+
+      sock._pairingInProgress = false
+      activeSessions.set(phone, {
+        ...current,
+        sock: null,
+        connected: false,
+        registered: current.registered, // keep registered flag, so /session still finds it
+        retries: 0,
+        reconnectTimer: null,
+        disconnectedSince: Date.now()
+      })
+      if (hooks.onPairingInterrupted) await hooks.onPairingInterrupted(phone, tgChatId).catch(() => {})
+      if (hooks.onLoggedOut && (code === DisconnectReason.loggedOut || code === 401)) {
+        await hooks.onLoggedOut(phone, tgChatId).catch(() => {})
+      }
+      return
+    }
+  })
+
+  return sock
+}
+
+export async function resumeSessions(hooks = {}) {
+  if (!fs.existsSync(SESSIONS_ROOT)) return
+  const phones = fs.readdirSync(SESSIONS_ROOT)
+    .filter(d => fs.existsSync(path.join(SESSIONS_ROOT, d, 'creds.json')))
+  if (!phones.length) return
+  console.log(`\n📂 Resuming ${phones.length} session(s): ${phones.join(', ')}\n`)
+  for (const phone of phones) {
+    // Only resume REGISTERED ones. Unregistered = incomplete pairing, skip.
+    if (!hasRegisteredCredentials(phone)) {
+      console.log(`[${phone}] Skipping unregistered (incomplete pairing)`)
+      continue
+    }
+    try {
+      await startSession(phone, null, false, hooks)
+    } catch (e) {
+      console.error(`[${phone}] Resume error:`, e.message)
+    }
+    await new Promise(r => setTimeout(r, 2000 + Math.random() * 2000))
+  }
+}
+
+export { SESSIONS_ROOT }

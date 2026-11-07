@@ -91,7 +91,7 @@ execute: async(sock,m,args)=>{
         renderLargerThumbnail:true
       }
     }
-  },{quoted:m})
+  })
 
   // extra view channel button style message
   await sock.sendMessage(m.chat,{

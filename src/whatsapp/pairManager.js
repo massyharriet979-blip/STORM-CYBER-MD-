@@ -3,7 +3,10 @@ import fs from 'fs'
 import path from 'path'
 // STORM-CYBER-MD — Pair Manager
 // One place owns ALL sockets. Telegram + Web both call startSession().
-// Adapted from proven pattern: reuse socket, never 2 sockets for same number.
+// Pair pattern fixed to Squichy pattern:
+// 1. Clean number (digits only, no +, no leading 0)
+// 2. Wait 3000ms after socket, then request code ONCE
+// 3. Code timeout 25s (code dies at ~20s), auto-retry on close if not paired
 
 import makeWASocket, {
   useMultiFileAuthState,
@@ -32,9 +35,19 @@ async function getBaileysVersion() {
   }
 }
 
+// --- SQUICHY NUMBER CLEANING ---
+const digits = (s) => String(s || '').replace(/[^0-9]/g, '')
+
+export function cleanPhone(phone) {
+  let n = digits(phone)
+  if (n.startsWith('0')) n = n.slice(1) // no leading 0
+  return n
+}
+
 export function hasRegisteredCredentials(phone) {
   try {
-    const file = path.join(SESSIONS_ROOT, String(phone || ''), 'creds.json')
+    const clean = cleanPhone(phone)
+    const file = path.join(SESSIONS_ROOT, clean, 'creds.json')
     return JSON.parse(fs.readFileSync(file, 'utf8')).registered === true
   } catch { return false }
 }
@@ -44,36 +57,41 @@ export function formatPairingCode(code) {
   return clean.match(/.{1,4}/g)?.join('-') || clean
 }
 
-// Same as his: wait 1500ms, then request, 65s timeout
-// Flag is ON the socket, not a global Set
+// --- SQUICHY PAIR PATTERN ---
+// Wait 3000ms, request ONCE with clean number, timeout 25s, clear flag always
 export function getPairingCode(sock, phone, mode = 'normal') {
   return new Promise((resolve, reject) => {
-    const TIMEOUT_MS = 65_000
+    const clean = cleanPhone(phone)
+    if (clean.length < 8 || clean.length > 15) {
+      return reject(new Error('Invalid number — country code first, no leading 0, no +, no spaces. Example: 256772123456'))
+    }
+    const TIMEOUT_MS = 25_000 // code dies at ~20s, don't wait 65s
     let settled = false
     sock._pairingInProgress = true
     const settle = (err, code) => {
       if (settled) return
       settled = true
-      if (err) sock._pairingInProgress = false
+      sock._pairingInProgress = false // FIX: clear on success AND error
       clearTimeout(timer)
       if (err) reject(err)
       else resolve(code)
     }
     const timer = setTimeout(() => {
-      settle(new Error('Timed out — WhatsApp did not send a code in 65s.'))
+      settle(new Error('Timed out — code expired. Request a new code.'))
     }, TIMEOUT_MS)
     setTimeout(() => {
-      sock.requestPairingCode(phone)
+      sock.requestPairingCode(clean)
         .then(c => {
           if (!c) return settle(new Error('WhatsApp returned an empty code.'))
           settle(null, formatPairingCode(c))
         })
         .catch(e => settle(e))
-    }, 1500)
+    }, 3000) // FIX: 3000ms like Squichy, not 1500ms - let socket connect first
   })
 }
 
 export async function clearSession(phone) {
+  phone = cleanPhone(phone)
   const session = activeSessions.get(phone)
   if (session) {
     if (session.reconnectTimer) clearTimeout(session.reconnectTimer)
@@ -107,6 +125,7 @@ function attachHooks(sock, hooks = {}) {
 }
 
 export async function startSession(phone, tgChatId = null, forceNew = false, hooks = {}) {
+  phone = cleanPhone(phone)
   const existing = activeSessions.get(phone)
   const alreadyRegistered = hasRegisteredCredentials(phone) || existing?.registered === true
 
@@ -147,6 +166,7 @@ export async function startSession(phone, tgChatId = null, forceNew = false, hoo
 }
 
 async function _createSession(phone, tgChatId = null, hooks = {}) {
+  phone = cleanPhone(phone)
   const sessionDir = path.join(SESSIONS_ROOT, phone)
   fs.mkdirSync(sessionDir, { recursive: true })
 
@@ -156,8 +176,7 @@ async function _createSession(phone, tgChatId = null, hooks = {}) {
   const sock = makeWASocket({
     version,
     logger: pino({ level: 'silent' }),
-    // HIS WORKING BROWSER - Safari macOS, not Chrome
-    browser: Browsers.macOS('Safari'),
+    browser: Browsers.ubuntu('Chrome'),
     auth: {
       creds: state.creds,
       keys: makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' }))
@@ -166,7 +185,7 @@ async function _createSession(phone, tgChatId = null, hooks = {}) {
     markOnlineOnConnect: false,
     connectTimeoutMs: 60000,
     keepAliveIntervalMs: 15000,
-    defaultQueryTimeoutMs: 0,
+    defaultQueryTimeoutMs: 60000,
     emitOwnEvents: false,
     generateHighQualityLinkPreview: false,
     getMessage: async () => ({ conversation: ' ' })
@@ -224,7 +243,6 @@ async function _createSession(phone, tgChatId = null, hooks = {}) {
       console.log(`[${phone}] close code:${code} msg:${lastDisconnect?.error?.message || ''}`)
 
       // 515 = restart required after pairing — KEEP creds, reconnect in 7s
-      // This was your bug: you kept folder but left it dead. He reconnects.
       if (code === 515) {
         console.log(`[${phone}] 515 restart required — keeping creds, reconnecting in 7s`)
         const t = setTimeout(() => {
@@ -240,11 +258,19 @@ async function _createSession(phone, tgChatId = null, hooks = {}) {
 
       if (isRealLogout) {
         if (sock._pairingInProgress) {
-          // Interrupted DURING pairing — KEEP folder so user can retry
-          // Do NOT delete. Next startSession will clear if incomplete.
-          console.log(`[${phone}] Pairing interrupted — session kept for retry`)
+          // SQUICHY PATTERN: pairing interrupted / not completed in time
+          // Don't just sit dead. Clear flag, keep folder, auto-retry in 3s for a NEW code + NEW push
+          // Next startSession will clear if incomplete, so we get a fresh code
+          console.log(`[${phone}] Pairing not completed — requesting a new code in 3s`)
+          sock._pairingInProgress = false
           activeSessions.set(phone, { ...session, sock: null, connected: false })
-          if (hooks.onPairingInterrupted) await hooks.onPairingInterrupted(phone, tgChatId).catch(() => {})
+          const t = setTimeout(() => {
+            if (!activeSessions.has(phone)) return
+            startSession(phone, tgChatId, false, hooks).catch(() => {})
+            if (hooks.onPairingInterrupted) hooks.onPairingInterrupted(phone, tgChatId).catch(() => {})
+          }, 3000)
+          session.reconnectTimer = t
+          activeSessions.set(phone, { ...session, sock: null, connected: false, reconnectTimer: t })
           return
         }
         console.log(`[${phone}] Logged out — cleaning session`)
