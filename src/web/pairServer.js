@@ -286,3 +286,4 @@ export async function resumeSessions(hooks = {}) {
 }
 
 export { SESSIONS_ROOT }
+export function startPairServer(){ app.listen(PORT, '0.0.0.0', ()=>console.log(`✅ PAIR SERVER ONLINE ${PORT}`)) }
