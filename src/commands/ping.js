@@ -5,8 +5,7 @@ export default {
   async execute(sock, m, args) {
     const jid = m.chat
     const start = Date.now()
-    try { await sock.sendMessage(jid, { react: { text: "⚡", key: m.key } }) } catch {}
-    let chk = await sock.sendMessage(jid, { text: "🔍 ᴄʜᴇᴄᴋɪɴɢ ꜱᴇʀᴠᴇʀ..." })
+    await sock.sendMessage(jid, { text: "🔍 ᴄʜᴇᴄᴋɪɴɢ ꜱᴇʀᴠᴇʀ..." })
     await new Promise(r => setTimeout(r, 800))
     const latency = Date.now() - start
     const speed = (Math.random() * 0.9 + 0.1).toFixed(3)
@@ -20,7 +19,6 @@ export default {
 │ ꜱʏꜱᴛᴇᴍ: ᴄʏʙᴇʀ-ꜱʏꜱᴛᴇᴍ
 │ ꜱᴇʀᴠᴇʀ: ꜱᴛᴏʀᴍ ᴄʟᴏᴜᴅ
 ╰───────────────`
-    await sock.sendMessage(jid, { text, edit: chk.key })
-    try { await sock.sendMessage(jid, { react: { text: "✅", key: m.key } }) } catch {}
+    await sock.sendMessage(jid, { text })
   }
 }
