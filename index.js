@@ -46,6 +46,7 @@ if(!fs.existsSync('./src/database/session')) fs.mkdirSync('./src/database/sessio
 if(!fs.existsSync('./sessions')) fs.mkdirSync('./sessions',{recursive:true})
 if(!fs.existsSync('./database')) fs.mkdirSync('./database',{recursive:true})
 if(!fs.existsSync(commandFolder)) fs.mkdirSync(commandFolder,{recursive:true})
+if(!fs.existsSync('./assets')) fs.mkdirSync('./assets',{recursive:true})
 
 global.subbots = new Map()
 global.subbotOwners = []
@@ -79,8 +80,21 @@ function saveTgSession(tgId, number){
 global.scheduleAutoAction = scheduleAutoAction;
 global.saveAutoMuteSchedule = saveAutoMuteSchedule;
 
+// FIXED: cache prefix/mode/sudo so we don't read disk on every message
+const _cfgCache = new Map()
+function readJsonCached(file, ttlMs = 10000){
+  const now = Date.now()
+  const hit = _cfgCache.get(file)
+  if(hit && (now - hit.t) < ttlMs) return hit.v
+  try{
+    if(!fs.existsSync(file)){ _cfgCache.set(file,{t:now,v:null}); return null }
+    const v = JSON.parse(fs.readFileSync(file))
+    _cfgCache.set(file,{t:now,v})
+    return v
+  }catch(e){ return null }
+}
+
 // FIXED: ESM project - .js files MUST use await import(), .cjs files use require()
-// Old code did require() on .js files, which throws ERR_REQUIRE_ESM and left 0 commands loaded
 async function loadCommands(){
   global.commands.clear()
   let failed = []
@@ -129,10 +143,17 @@ global.loadCommands = loadCommands
 function createMessageHandler(sock, isSubBotSession = false){
   const msgCache = new Map()
   return async ({messages})=>{
+    // FIXED: run messages in parallel, don't let one slow .menu block others
     for(const msg of messages){
+      handleOneMessage(sock, msg, isSubBotSession, msgCache).catch(e=>console.log('upsert per-msg error', e.message))
+    }
+  }
+}
+
+async function handleOneMessage(sock, msg, isSubBotSession, msgCache){
       try{
-        if(!msg.message) continue
-        if(msg.key.remoteJid=='status@broadcast') continue
+        if(!msg.message) return
+        if(msg.key.remoteJid=='status@broadcast') return
         let remoteJid=msg.key.remoteJid
         let isGroup=remoteJid.endsWith('@g.us')
         let sender=isGroup? (msg.key.participant || msg.participant || remoteJid) : (msg.key.remoteJid)
@@ -143,64 +164,53 @@ function createMessageHandler(sock, isSubBotSession = false){
         let botIdNum=(sock.user?.id?.split(':')[0].split('@')[0])||""
 
         const delHandled = await handleAntidelete(sock, msg, remoteJid, botIdNum, msgCache)
-        if(delHandled) continue
+        if(delHandled) return
         await saveMessageCache(msg, remoteJid, sender, msgCache, sock)
 
+        // FIXED: use cache, no readFileSync every message
         let dynamicPrefix=prefix
         try{
-          let pFile=`./database/prefix_${botIdNum}.json`
-          if(fs.existsSync(pFile)){
-            let j=JSON.parse(fs.readFileSync(pFile))
-            if(j.prefix) dynamicPrefix=j.prefix
-          }
+          let j = readJsonCached(`./database/prefix_${botIdNum}.json`)
+          if(j?.prefix) dynamicPrefix=j.prefix
         }catch(e){ console.log('prefix load err', e.message) }
         let mode="public"
         try{
-          let mFile=`./database/mode_${botIdNum}.json`
-          if(fs.existsSync(mFile)){
-            let j=JSON.parse(fs.readFileSync(mFile))
+          let j = readJsonCached(`./database/mode_${botIdNum}.json`)
+          if(j){
             if(j.mode) mode=j.mode
             else if(typeof j==="string") mode=j
           } else if(!isSubBotSession){
-            let altPath='./src/database/mode.json'
-            if(fs.existsSync(altPath)){
-              try{
-                let alt=JSON.parse(fs.readFileSync(altPath))
-                if(typeof alt==="string") mode=alt
-                else if(alt.mode) mode=alt.mode
-              }catch(e){ console.log('alt mode err', e.message) }
+            let alt = readJsonCached('./src/database/mode.json')
+            if(alt){
+              if(typeof alt==="string") mode=alt
+              else if(alt.mode) mode=alt.mode
             }
           }
         }catch(e){ console.log('mode load err', e.message) }
         if(mode==="self" || mode==="inbox"){
-          if(senderNum!==botIdNum) continue
+          if(senderNum!==botIdNum) return
         }
         if(mode==="private"){
           let sudoList=[]
           try{
-            if(fs.existsSync(`./database/sudo_${botIdNum}.json`)) sudoList=JSON.parse(fs.readFileSync(`./database/sudo_${botIdNum}.json`))
-            if(fs.existsSync('./database/sudo.json')){
-              let g=JSON.parse(fs.readFileSync('./database/sudo.json'))
-              if(Array.isArray(g)) sudoList=[...sudoList,...g]
-              else if(g.sudo) sudoList=[...sudoList,...g.sudo]
-            }
-            if(fs.existsSync('./src/database/sudo.json')){
-              let g=JSON.parse(fs.readFileSync('./src/database/sudo.json'))
-              if(Array.isArray(g)) sudoList=[...sudoList,...g]
-            }
+            let a = readJsonCached(`./database/sudo_${botIdNum}.json`)
+            if(Array.isArray(a)) sudoList=[...sudoList,...a]
+            else if(a?.sudo) sudoList=[...sudoList,...a.sudo]
+            let g = readJsonCached('./database/sudo.json')
+            if(Array.isArray(g)) sudoList=[...sudoList,...g]
+            else if(g?.sudo) sudoList=[...sudoList,...g.sudo]
+            let s2 = readJsonCached('./src/database/sudo.json')
+            if(Array.isArray(s2)) sudoList=[...sudoList,...s2]
           }catch(e){ console.log('sudo load err', e.message) }
           let isSudo=sudoList.includes(senderNum) || sudoList.includes(sender) || sudoList.includes(senderNum+"@s.whatsapp.net")
-          if(senderNum!==botIdNum &&!isSudo) continue
+          if(senderNum!==botIdNum &&!isSudo) return
         }
+        // FIXED: don't await 1200ms delay, just fire typing and continue
         try{
-          let atFile=`./database/autotyping_${botIdNum}.json`
-          if(fs.existsSync(atFile)){
-            let at=JSON.parse(fs.readFileSync(atFile))
-            if(at.enabled){
-              if(!(global.ghostMode && isSubBotSession)){
-                await sock.sendPresenceUpdate('composing', remoteJid)
-                await delay(1200)
-              }
+          let at = readJsonCached(`./database/autotyping_${botIdNum}.json`)
+          if(at?.enabled){
+            if(!(global.ghostMode && isSubBotSession)){
+              sock.sendPresenceUpdate('composing', remoteJid).catch(()=>{})
             }
           }
         }catch(e){ console.log('autotyping err', e.message) }
@@ -225,22 +235,22 @@ function createMessageHandler(sock, isSubBotSession = false){
         }
         if(isGroup){
           const handled = await handleAntilink(sock, remoteJid, sender, body, botIdNum, msg)
-          if(handled) continue
+          if(handled) return
         }
         if(isGroup){
           const bugHandled = await handleAntibug(sock, remoteJid, sender, body, botIdNum, msg, dynamicPrefix)
-          if(bugHandled) continue
+          if(bugHandled) return
         }
         if(isGroup){
           await handleWarnReminder(sock, remoteJid, sender, body, botIdNum, msg, dynamicPrefix, isGroup)
         }
 
-        if(!body) continue
-        if(!body.startsWith(dynamicPrefix)) continue
+        if(!body) return
+        if(!body.startsWith(dynamicPrefix)) return
         let args=body.slice(dynamicPrefix.length).trim().split(/ +/)
         let name=args.shift().toLowerCase()
         let cmd=global.commands.get(name)
-        if(!cmd){ console.log(`[CMD] Unknown: .${name} from ${senderNum} | loaded=${global.commands.size} | mode=${mode} | prefix=${dynamicPrefix}`); continue }
+        if(!cmd){ console.log(`[CMD] Unknown: .${name} from ${senderNum} | loaded=${global.commands.size} | mode=${mode} | prefix=${dynamicPrefix}`); return }
         let mObj={}
         mObj.key=msg.key
         mObj.chat=remoteJid
@@ -266,13 +276,12 @@ function createMessageHandler(sock, isSubBotSession = false){
           mObj.quoted.msg=mObj.quoted.message[mObj.quoted.mtype]
         }
         console.log(`[CMD] .${name} from ${senderNum} on ${isSubBotSession?'SUBBOT':'MAIN'} ${botIdNum}`)
-        await cmd.execute(sock,mObj,args)
+        // FIXED: don't await here - fire and return, so next message isn't blocked
+        cmd.execute(sock,mObj,args).catch(e=>console.log('cmd error', name, e.message))
       }catch(e){
         console.log('upsert per-msg error', e.message)
-        continue
+        return
       }
-    }
-  }
 }
 
 global.createMessageHandler = createMessageHandler;
