@@ -26,7 +26,7 @@ export default {
       clean = clean.replace(/\^/g, '**')
       // prevent ** ** abuse
       if (clean.length > 30) throw new Error('too long')
-      const result = Function(`"use strict"; return (${clean})`)()
+      const result = Function(` return (${clean})`)()
 
       const senderName = msg.pushName || 'user'
       const text = `╭══〘 🧮 ᴄᴀʟᴄᴜʟᴀᴛᴏʀ 〙══⊷❍

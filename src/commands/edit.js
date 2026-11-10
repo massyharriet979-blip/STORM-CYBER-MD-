@@ -24,10 +24,10 @@ execute: async(sock,m,args)=>{
   try{
    await sock.sendMessage(m.chat,{
     text:newText,
-    edit:{remoteJid:m.chat, fromMe:true, id:ctx.stanzaId}
+    edit:{remoteJid:m.chat, fromMe:true, id:m.stanzaId}
    });
   }catch{
-   await sock.sendMessage(m.chat,{delete:{remoteJid:m.chat, fromMe:true, id:ctx.stanzaId}});
+   await sock.sendMessage(m.chat,{delete:{remoteJid:m.chat, fromMe:true, id:m.stanzaId}});
    await sock.sendMessage(m.chat,{text:newText});
   }
  }catch(e){

@@ -24,8 +24,8 @@ execute: async(sock,m,args)=>{
 
   let jid = args[0].replace(/[^0-9]/g,'')+"@s.whatsapp.net";
   let msg = {
-    message: ctx.quotedMessage,
-    key: { remoteJid: m.chat, fromMe: false, id: ctx.stanzaId, participant: ctx.participant }
+    message: m.quotedMessage,
+    key: { remoteJid: m.chat, fromMe: false, id: m.stanzaId, participant: m.participant }
   };
 
   await sock.sendMessage(jid,{forward: msg});
