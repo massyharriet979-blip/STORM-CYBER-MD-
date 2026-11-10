@@ -1,9 +1,6 @@
 import { Telegraf, Markup } from 'telegraf'
 import fs from 'fs'
 import { sessionCommand, sessionActions } from './session.js'
-import { disconnectCommand, disconnectActions, disconnectConfirm, disconnectCancel } from '../commands/disconnect.js'
-import { listCommand, listActions } from '../commands/list.js'
-import { usersCommand, usersActions } from '../commands/users.js'
 
 const R="\x1b[0m", B="\x1b[1m", C="\x1b[36m", G="\x1b[32m", Y="\x1b[33m", Rd="\x1b[31m"
 
