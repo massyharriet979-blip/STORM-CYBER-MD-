@@ -123,13 +123,15 @@ function readJsonCached(file, ttlMs = 10000){
 async function loadCommands(){
   global.commands.clear()
   let failed = []
+  // FIX: Telegram commands live in same folder but are NOT WhatsApp commands - skip them
+  const SKIP_TELEGRAM = new Set(['session.js','disconnect.js','list.js','users.js'])
   const walk = (dir) => {
     let out = []
     try{
       for(const e of fs.readdirSync(dir, { withFileTypes: true })){
         const full = path.join(dir, e.name)
         if(e.isDirectory()) out.push(...walk(full))
-        else if(e.name.endsWith('.js') || e.name.endsWith('.cjs')) out.push(full)
+        else if((e.name.endsWith('.js') || e.name.endsWith('.cjs')) && !SKIP_TELEGRAM.has(e.name)) out.push(full)
       }
     }catch{}
     return out
