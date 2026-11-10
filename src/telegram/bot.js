@@ -1,6 +1,6 @@
 import { Telegraf, Markup } from 'telegraf'
 import fs from 'fs'
-import { sessionCommand, sessionActions } from '../commands/session.js'
+import { sessionCommand, sessionActions } from './session.js'
 import { disconnectCommand, disconnectActions, disconnectConfirm, disconnectCancel } from '../commands/disconnect.js'
 import { listCommand, listActions } from '../commands/list.js'
 import { usersCommand, usersActions } from '../commands/users.js'
