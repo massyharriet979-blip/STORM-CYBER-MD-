@@ -132,7 +132,7 @@ bot.action(/^reconnect_(.+)$/, async (ctx)=>{
       return ctx.reply(toSmallCaps(`🔄 ʀᴇᴄᴏɴɴᴇᴄᴛ +${num}\n\nʏᴏᴜʀ ɴᴇᴡ ᴘᴀɪʀɪɴɢ ᴄᴏᴅᴇ: ${code}\n\nɢᴏ ᴛᴏ ᴡʜᴀᴛsᴀᴘᴘ > ʟɪɴᴋᴇᴅ ᴅᴇᴠɪᴄᴇs > ʟɪɴᴋ ᴡɪᴛʜ ᴘʜᴏɴᴇ ɴᴜᴍʙᴇʀ`), doReply(ctx))
     } else {
       // Fallback if your server uses /pair function - tell user to use it
-      return ctx.reply(toSmallCaps(`ᴜsᴇ /pair ${num} ᴛᴏ ɢᴇᴛ ᴀ ɴᴇᴡ ᴄᴏᴅᴇ.\nʏᴏᴜʀ sᴇssɪᴏɴ ɪs sᴛɪʟʟ sᴀᴠᴇᴅ, ɪᴛ ᴡɪʟʟ ɴᴏᴛ ʙᴇ ᴅᴇʟᴇᴛᴇᴅ.`), doReply(ctx))
+      return ctx.reply(toSmallCaps(`ᴜsᴇ /pair ${num} ᴛᴏ ɢᴇᴛ ᴀ ɴᴇᴡ ᴄᴏᴅᴇ.\nʏᴏᴜʀ sᴇssɪᴏɴ ɪs sᴛɪʟʟ sᴀᴠᴇᴅ, ɪᴛ ᴡɪʟʟ  ʙᴇ refreshed.`), doReply(ctx))
     }
   }catch(e){
     return ctx.reply(toSmallCaps(`ғᴀɪʟᴇᴅ ᴛᴏ ʀᴇᴄᴏɴɴᴇᴄᴛ: ${e.message}`), doReply(ctx))
