@@ -1,13 +1,6 @@
 import pino from 'pino'
 import fs from 'fs'
 import path from 'path'
-// STORM-CYBER-MD — Pair Manager
-// One place owns ALL sockets. Telegram + Web both call startSession().
-// Pair pattern fixed to Squichy pattern:
-// 1. Clean number (digits only, no +, no leading 0)
-// 2. Wait 3000ms after socket, then request code ONCE
-// 3. Code timeout 25s (code dies at ~20s), auto-retry on close if not paired
-
 import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason,
@@ -19,8 +12,8 @@ import makeWASocket, {
 const SESSIONS_ROOT = path.join(process.cwd(), 'sessions')
 if (!fs.existsSync(SESSIONS_ROOT)) fs.mkdirSync(SESSIONS_ROOT, { recursive: true })
 
-export const activeSessions = new Map() // phone -> { sock, tgChatId, retries, connected, registered, reconnectTimer }
-const _sessionStarts = new Map() // phone -> Promise<sock> - prevents double start
+export const activeSessions = new Map()
+const _sessionStarts = new Map()
 
 let _baileysVersion = null
 async function getBaileysVersion() {
@@ -35,12 +28,10 @@ async function getBaileysVersion() {
   }
 }
 
-// --- SQUICHY NUMBER CLEANING ---
 const digits = (s) => String(s || '').replace(/[^0-9]/g, '')
-
 export function cleanPhone(phone) {
   let n = digits(phone)
-  if (n.startsWith('0')) n = n.slice(1) // no leading 0
+  if (n.startsWith('0')) n = n.slice(1)
   return n
 }
 
@@ -57,21 +48,19 @@ export function formatPairingCode(code) {
   return clean.match(/.{1,4}/g)?.join('-') || clean
 }
 
-// --- SQUICHY PAIR PATTERN ---
-// Wait 3000ms, request ONCE with clean number, timeout 25s, clear flag always
 export function getPairingCode(sock, phone, mode = 'normal') {
   return new Promise((resolve, reject) => {
     const clean = cleanPhone(phone)
     if (clean.length < 8 || clean.length > 15) {
       return reject(new Error('Invalid number — country code first, no leading 0, no +, no spaces. Example: 256772123456'))
     }
-    const TIMEOUT_MS = 25_000 // code dies at ~20s, don't wait 65s
+    const TIMEOUT_MS = 25_000
     let settled = false
     sock._pairingInProgress = true
     const settle = (err, code) => {
       if (settled) return
       settled = true
-      sock._pairingInProgress = false // FIX: clear on success AND error
+      sock._pairingInProgress = false
       clearTimeout(timer)
       if (err) reject(err)
       else resolve(code)
@@ -86,10 +75,11 @@ export function getPairingCode(sock, phone, mode = 'normal') {
           settle(null, formatPairingCode(c))
         })
         .catch(e => settle(e))
-    }, 3000) // FIX: 3000ms like Squichy, not 1500ms - let socket connect first
+    }, 3000)
   })
 }
 
+// ONLY /disconnect calls this. Nothing else in this file deletes a folder by itself.
 export async function clearSession(phone) {
   phone = cleanPhone(phone)
   const session = activeSessions.get(phone)
@@ -105,8 +95,6 @@ export async function clearSession(phone) {
   return true
 }
 
-// FIX FOR SUBBOTS: hooks.onMessage is a factory (sock) => handler, NOT a handler.
-// Call it once with sock, attach returned handler once. Guard stops double-reply.
 function attachHooks(sock, hooks = {}) {
   if (!sock || !hooks) return
   try {
@@ -129,30 +117,30 @@ export async function startSession(phone, tgChatId = null, forceNew = false, hoo
   const existing = activeSessions.get(phone)
   const alreadyRegistered = hasRegisteredCredentials(phone) || existing?.registered === true
 
-  // 1. Fully registered -> reuse, don't create 2nd socket
-  // FIX: attach hooks on reuse too, otherwise reused socket has no commands
   if (!forceNew && existing?.sock && alreadyRegistered && !existing.sock._pairingInProgress) {
     if (tgChatId) existing.tgChatId = tgChatId
     attachHooks(existing.sock, hooks)
     return existing.sock
   }
 
-  // 2. Incomplete / abandoned pairing -> clear for fresh code
-  // This is where unlinked junk gets deleted - on NEXT start, not on close
-  if (!forceNew && existing && (!alreadyRegistered || existing.sock?._pairingInProgress)) {
-    console.log(`[${phone}] Incomplete pairing — clearing for fresh code`)
-    await clearSession(phone)
-    await new Promise(r => setTimeout(r, 600))
+  // FIX: DO NOT CLEAR incomplete pairing here. Keep folder until /disconnect.
+  // Old code deleted folder on next /pair - that made TOTAL drop by itself.
+  // Now we just reuse the existing socket if it is still alive.
+  if (!forceNew && existing?.sock && existing.sock._pairingInProgress) {
+    return existing.sock
+  }
+  if (!forceNew && existing && !existing.sock) {
+    // Socket died but folder kept - fall through to recreate socket, keep creds
+    activeSessions.delete(phone)
+    _sessionStarts.delete(phone)
   }
 
-  // 3. Explicit force new
   if (forceNew) {
     console.log(`[${phone}] Force new — clearing old session`)
     await clearSession(phone)
     await new Promise(r => setTimeout(r, 800))
   }
 
-  // Prevent double start - second call returns same promise
   const inFlight = _sessionStarts.get(phone)
   if (inFlight && !forceNew) return inFlight
 
@@ -199,13 +187,11 @@ async function _createSession(phone, tgChatId = null, hooks = {}) {
     connected: false,
     registered: Boolean(state.creds?.registered),
     reconnectTimer: null,
-    disconnectedSince: null
+    disconnectedSince: null,
+    disconnectedAt: null
   })
 
   sock.ev.on('creds.update', saveCreds)
-
-  // Hooks from index.js - so pairManager stays clean, STORM handlers live in index.js
-  // FIX: use attachHooks() with guard, not direct ev.on
   attachHooks(sock, hooks)
 
   sock.ev.on('connection.update', async ({ connection, lastDisconnect }) => {
@@ -222,10 +208,10 @@ async function _createSession(phone, tgChatId = null, hooks = {}) {
         registered: true,
         retries: 0,
         reconnectTimer: null,
-        disconnectedSince: null
+        disconnectedSince: null,
+        disconnectedAt: null
       })
       console.log(`✅ STORM SUBBOT ${phone} CONNECTED`)
-      // FIX: re-attach on open, in case socket was recreated by Baileys internally
       attachHooks(sock, hooks)
       if (hooks.onOpen) await hooks.onOpen(sock, phone).catch(() => {})
       return
@@ -242,7 +228,6 @@ async function _createSession(phone, tgChatId = null, hooks = {}) {
       const code = lastDisconnect?.error?.output?.statusCode
       console.log(`[${phone}] close code:${code} msg:${lastDisconnect?.error?.message || ''}`)
 
-      // 515 = restart required after pairing — KEEP creds, reconnect in 7s
       if (code === 515) {
         console.log(`[${phone}] 515 restart required — keeping creds, reconnecting in 7s`)
         const t = setTimeout(() => {
@@ -250,40 +235,33 @@ async function _createSession(phone, tgChatId = null, hooks = {}) {
           startSession(phone, tgChatId, false, hooks).catch(() => {})
         }, 7000)
         session.reconnectTimer = t
-        activeSessions.set(phone, { ...session, sock: null, connected: false })
+        activeSessions.set(phone, { ...session, sock: null, connected: false, reconnectTimer: t })
         return
       }
 
       const isRealLogout = code === DisconnectReason.loggedOut || code === 401
-
       if (isRealLogout) {
         if (sock._pairingInProgress) {
-          // SQUICHY PATTERN: pairing interrupted / not completed in time
-          // Don't just sit dead. Clear flag, keep folder, auto-retry in 3s for a NEW code + NEW push
-          // Next startSession will clear if incomplete, so we get a fresh code
-          console.log(`[${phone}] Pairing not completed — requesting a new code in 3s`)
+          // FIX: Pairing failed - DO NOT open a dead socket, DO NOT delete folder.
+          // Clear flag, keep folder, keep entry as disconnected.
+          // Next /pair will request a FRESH code -> WhatsApp sends fresh push notification.
+          console.log(`[${phone}] Pairing not completed — kept folder, next /pair will request fresh code`)
           sock._pairingInProgress = false
-          activeSessions.set(phone, { ...session, sock: null, connected: false })
-          const t = setTimeout(() => {
-            if (!activeSessions.has(phone)) return
-            startSession(phone, tgChatId, false, hooks).catch(() => {})
-            if (hooks.onPairingInterrupted) hooks.onPairingInterrupted(phone, tgChatId).catch(() => {})
-          }, 3000)
-          session.reconnectTimer = t
-          activeSessions.set(phone, { ...session, sock: null, connected: false, reconnectTimer: t })
+          activeSessions.set(phone, { ...session, sock: null, connected: false, disconnectedSince: Date.now(), disconnectedAt: Date.now(), reconnectTimer: null })
+          if (hooks.onPairingInterrupted) hooks.onPairingInterrupted(phone, tgChatId).catch(() => {})
           return
         }
-        console.log(`[${phone}] Logged out — cleaning session`)
-        activeSessions.delete(phone)
-        try { fs.rmSync(sessionDir, { recursive: true, force: true }) } catch {}
+        // FIX: Logged out - KEEP FOLDER. Only /disconnect deletes.
+        // Before this fix, it did rmSync here and TOTAL dropped by itself.
+        console.log(`[${phone}] Logged out — KEEPING folder, marked disconnected. Only /disconnect deletes.`)
+        activeSessions.set(phone, { ...session, sock: null, connected: false, disconnectedSince: Date.now(), disconnectedAt: Date.now(), reconnectTimer: null })
         if (hooks.onLoggedOut) await hooks.onLoggedOut(phone, tgChatId).catch(() => {})
         return
       }
 
-      // Everything else -> reconnect, DO NOT delete credentials
       session.retries = (session.retries || 0) + 1
       if (!session.disconnectedSince) session.disconnectedSince = Date.now()
-      activeSessions.set(phone, { ...session, sock: null, connected: false })
+      activeSessions.set(phone, { ...session, sock: null, connected: false, disconnectedAt: Date.now() })
 
       if (session.retries > 20) {
         console.log(`[${phone}] Max retries — slowing to 8 min`)
@@ -296,7 +274,7 @@ async function _createSession(phone, tgChatId = null, hooks = {}) {
           startSession(phone, tgChatId, false, hooks).catch(() => {})
         }, 8 * 60 * 1000)
         session.reconnectTimer = t
-        activeSessions.set(phone, { ...session, sock: null, connected: false })
+        activeSessions.set(phone, { ...session, sock: null, connected: false, reconnectTimer: t })
         return
       }
 
@@ -318,7 +296,7 @@ async function _createSession(phone, tgChatId = null, hooks = {}) {
         startSession(phone, tgChatId, false, hooks).catch(() => {})
       }, delayMs)
       session.reconnectTimer = t
-      activeSessions.set(phone, { ...session, sock: null, connected: false })
+      activeSessions.set(phone, { ...session, sock: null, connected: false, reconnectTimer: t })
     }
   })
 
@@ -332,8 +310,6 @@ export async function resumeSessions(hooks = {}) {
   if (!phones.length) return
   console.log(`\n📂 Resuming ${phones.length} session(s): ${phones.join(', ')}\n`)
   for (const phone of phones) {
-    // Only resume REGISTERED ones. Unregistered = incomplete pairing, skip.
-    // Next /pair will clear it via startSession rule 2.
     if (!hasRegisteredCredentials(phone)) {
       console.log(`[${phone}] Skipping unregistered (incomplete pairing)`)
       continue

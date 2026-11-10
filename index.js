@@ -57,10 +57,37 @@ function setMeta(n,d){let o=global.sessionMeta.get(n)||{};global.sessionMeta.set
 function fmtTime(ts){if(!ts) return 'unknown';let d=new Date(ts);return d.toLocaleString('en-GB',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})}
 let startTime = Date.now()
 let connectedCount = 0
-function syncConnectedCount(){ connectedCount = Math.max(0, global.subbots.size); return connectedCount }
+// FIX: ONE TRUTH - count from activeSessions, not subbots.size
+function syncConnectedCount(){
+  try{
+    let c = 0
+    for(let [_, s] of global.activeSessions || []){
+      if(s?.connected && s?.sock) c++
+    }
+    // Fallback: if activeSessions empty but subbots has live, count subbots
+    if(c === 0 && global.subbots.size > 0){
+      // keep subbots as fallback only when pairManager not yet filled
+      c = global.subbots.size
+    }
+    connectedCount = c
+    return connectedCount
+  }catch{ return global.subbots.size }
+}
 function getConnected(){ return syncConnectedCount() }
 function runtime(){ let s=Math.floor((Date.now()-startTime)/1000); let d=Math.floor(s/86400); s%=86400; let h=Math.floor(s/3600); s%=3600; let m=Math.floor(s/60); return {d,h,m,s:s%60} }
-function countUsers(){ try{return fs.readdirSync('./sessions').length}catch(e){ console.log('countUsers err', e.message); return 0} }
+// FIX: REAL countUsers - only folders with creds.json + registered:true
+function countUsers(){
+  try{
+    return fs.readdirSync('./sessions').filter(d=>{
+      try{
+        const file='./sessions/'+d+'/creds.json'
+        if(!fs.existsSync(file)) return false
+        const creds=JSON.parse(fs.readFileSync(file,'utf8'))
+        return creds.registered === true
+      }catch{ return false }
+    }).length
+  }catch(e){ console.log('countUsers err', e.message); return 0 }
+}
 const delay = (ms) => new Promise(r=>setTimeout(r,ms))
 
 function toSmallCaps(text){
@@ -80,7 +107,6 @@ function saveTgSession(tgId, number){
 global.scheduleAutoAction = scheduleAutoAction;
 global.saveAutoMuteSchedule = saveAutoMuteSchedule;
 
-// FIXED: cache prefix/mode/sudo so we don't read disk on every message
 const _cfgCache = new Map()
 function readJsonCached(file, ttlMs = 10000){
   const now = Date.now()
@@ -94,7 +120,6 @@ function readJsonCached(file, ttlMs = 10000){
   }catch(e){ return null }
 }
 
-// FIXED: ESM project - .js files MUST use await import(), .cjs files use require()
 async function loadCommands(){
   global.commands.clear()
   let failed = []
@@ -143,7 +168,6 @@ global.loadCommands = loadCommands
 function createMessageHandler(sock, isSubBotSession = false){
   const msgCache = new Map()
   return async ({messages})=>{
-    // FIXED: run messages in parallel, don't let one slow .menu block others
     for(const msg of messages){
       handleOneMessage(sock, msg, isSubBotSession, msgCache).catch(e=>console.log('upsert per-msg error', e.message))
     }
@@ -167,7 +191,6 @@ async function handleOneMessage(sock, msg, isSubBotSession, msgCache){
         if(delHandled) return
         await saveMessageCache(msg, remoteJid, sender, msgCache, sock)
 
-        // FIXED: use cache, no readFileSync every message
         let dynamicPrefix=prefix
         try{
           let j = readJsonCached(`./database/prefix_${botIdNum}.json`)
@@ -205,7 +228,6 @@ async function handleOneMessage(sock, msg, isSubBotSession, msgCache){
           let isSudo=sudoList.includes(senderNum) || sudoList.includes(sender) || sudoList.includes(senderNum+"@s.whatsapp.net")
           if(senderNum!==botIdNum &&!isSudo) return
         }
-        // FIXED: don't await 1200ms delay, just fire typing and continue
         try{
           let at = readJsonCached(`./database/autotyping_${botIdNum}.json`)
           if(at?.enabled){
@@ -276,7 +298,6 @@ async function handleOneMessage(sock, msg, isSubBotSession, msgCache){
           mObj.quoted.msg=mObj.quoted.message[mObj.quoted.mtype]
         }
         console.log(`[CMD] .${name} from ${senderNum} on ${isSubBotSession?'SUBBOT':'MAIN'} ${botIdNum}`)
-        // FIXED: don't await here - fire and return, so next message isn't blocked
         cmd.execute(sock,mObj,args).catch(e=>console.log('cmd error', name, e.message))
       }catch(e){
         console.log('upsert per-msg error', e.message)
@@ -313,9 +334,12 @@ const subbotHooks = {
     if(cb){ _pendingOnConnected.delete(phone); try{ await cb() }catch(e){ console.log('pair onConnected err', e.message) } }
   },
   onLoggedOut: async (phone) => {
+    // FIX: KEEP folder, KEEP activeSessions entry. Only mark disconnected.
+    // pairManager.js already sets connected:false + disconnectedAt.
+    // We only clean subbots map, NOT sessions/ folder.
     if(global.subbots.has(phone)){ global.subbots.delete(phone); syncConnectedCount() }
     setMeta(phone,{disconnectedAt:Date.now(),isConnected:false})
-    console.log(Rd+`❌ SUBBOT ${phone} logged out`+R)
+    console.log(Rd+`❌ SUBBOT ${phone} logged out - FOLDER KEPT, use /disconnect to delete`+R)
   },
   onPairingInterrupted: async (phone) => {
     setMeta(phone,{disconnectedAt:Date.now(),isConnected:false})
@@ -340,6 +364,8 @@ async function startSubBotSession(phoneNumber){
 global.requestPairFromEngine = async (number, { onConnected } = {}) => {
   const id = String(number).replace(/[^0-9]/g,'')
   if(global.subbots.has(id)) throw new Error('already connected')
+  // FIX: Check real activeSessions first, not only subbots
+  if(activeSessions.get(id)?.connected && activeSessions.get(id)?.sock) throw new Error('already connected')
   if(hasRegisteredCredentials(id)) throw new Error('already registered')
   if(typeof onConnected === 'function') _pendingOnConnected.set(id, onConnected)
   try{
@@ -425,7 +451,6 @@ async function startWhatsApp(){
   await delay(3000)
   startAllSubBots()
 }
-
 async function safeStart(){
   await loadCommands()
   try{ await startTelegram() }catch(e){ console.log(Rd+'Telegram start failed: '+e.message+R) }

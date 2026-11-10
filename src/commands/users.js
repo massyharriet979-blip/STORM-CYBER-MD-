@@ -1,32 +1,131 @@
-export default{
-name:"users",
-aliases:["allusers","userlist"],
-execute: async(sock,m)=>{
- try{
-  const toSmallCaps = (str) => {
-    const map = {a:'ᴀ',b:'ʙ',c:'ᴄ',d:'ᴅ',e:'ᴇ',f:'ғ',g:'ɢ',h:'ʜ',i:'ɪ',j:'ᴊ',k:'ᴋ',l:'ʟ',m:'ᴍ',n:'ɴ',o:'ᴏ',p:'ᴘ',q:'ǫ',r:'ʀ',s:'s',t:'ᴛ',u:'ᴜ',v:'ᴠ',w:'ᴡ',x:'x',y:'ʏ',z:'ᴢ',A:'ᴀ',B:'ʙ',C:'ᴄ',D:'ᴅ',E:'ᴇ',F:'ғ',G:'ɢ',H:'ʜ',I:'ɪ',J:'ᴊ',K:'ᴋ',L:'ʟ',M:'ᴍ',N:'ɴ',O:'ᴏ',P:'ᴘ',Q:'ǫ',R:'ʀ',S:'s',T:'ᴛ',U:'ᴜ',V:'ᴠ',W:'ᴡ',X:'x',Y:'ʏ',Z:'ᴢ'};
-    return str.split('').map(c=>map[c]||c).join('');
-  };
+import fs from 'fs'
 
-  let botId=sock.user?.id?.split(":")[0].split("@")[0]||""
-  let sender=m.sender.split("@")[0]
+function toSmallCaps(text){
+  const map = {a:'ᴀ',b:'ʙ',c:'ᴄ',d:'ᴅ',e:'ᴇ',f:'ғ',g:'ɢ',h:'ʜ',i:'ɪ',j:'ᴊ',k:'ᴋ',l:'ʟ',m:'ᴍ',n:'ɴ',o:'ᴏ',p:'ᴘ',q:'ǫ',r:'ʀ',s:'s',t:'ᴛ',u:'ᴜ',v:'ᴠ',w:'ᴡ',x:'x',y:'ʏ',z:'ᴢ'}
+  return String(text||'').toLowerCase().split('').map(c=>map[c]||c).join('')
+}
+function doReply(ctx){
+  try{ if(ctx.message) return { reply_parameters: { message_id: ctx.message.message_id } } }catch{}
+  return {}
+}
+const digits = (s) => String(s || '').replace(/[^0-9]/g, '')
+function cleanPhone(n){
+  let id = digits(n)
+  if(id.startsWith('0')) id = id.slice(1)
+  return id
+}
 
-  if(sender!==botId){
-    return await sock.sendMessage(m.chat,{text:`${toSmallCaps("quantum clearance required")}\n${toSmallCaps("its not for local users")}`},{quoted:m})
+function getRealStats(){
+  let folders = []
+  try{ folders = fs.readdirSync('./sessions').filter(d => /^\d+$/.test(d)) }catch{ folders = [] }
+  let paired = []
+  let unpaired = []
+  for(let n of folders){
+    try{
+      let c = JSON.parse(fs.readFileSync(`./sessions/${n}/creds.json`,'utf8'))
+      if(c.registered === true) paired.push(n)
+      else unpaired.push(n)
+    }catch{
+      unpaired.push(n)
+    }
+  }
+  let connected = []
+  for(let n of paired){
+    let live = global.activeSessions?.get(n)
+    let isConn = !!(live?.connected && live?.sock)
+    if(!isConn && global.subbots?.has(n)) isConn = true
+    if(isConn) connected.push(n)
+  }
+  let disconnected = paired.filter(n => !connected.includes(n))
+  return {
+    total: paired.length,
+    paired: paired.length,
+    connected: connected.length,
+    disconnected: disconnected.length,
+    unpaired: unpaired.length,
+    pairedList: paired,
+    connectedList: connected,
+    disconnectedList: disconnected
+  }
+}
+
+function buildText(){
+  let s = getRealStats()
+  let t = `👥 ${toSmallCaps('users')}\n\n`
+  t += `📦 ${toSmallCaps('total')}: ${s.total}\n`
+  t += `✅ ${toSmallCaps('paired')}: ${s.paired}\n`
+  t += `🟢 ${toSmallCaps('connected')}: ${s.connected}\n`
+  t += `⚠️ ${toSmallCaps('disconnected')}: ${s.disconnected}\n`
+  if(s.unpaired > 0) t += `⏳ ${toSmallCaps('not paired yet')}: ${s.unpaired}\n`
+  t += `\n${toSmallCaps('disconnected = session kept, not deleted. only /disconnect deletes.')}\n`
+  if(s.disconnectedList.length){
+    t += `\n${toSmallCaps('disconnected list:')}\n`
+    for(let n of s.disconnectedList.slice(0,20)){
+      t += `⚠️ ${n}\n`
+    }
+    if(s.disconnectedList.length > 20) t += `${toSmallCaps('and')} ${s.disconnectedList.length - 20} ${toSmallCaps('more...')}\n`
+  }
+  return t
+}
+
+function buildKeyboard(){
+  return { reply_markup: { inline_keyboard: [
+    [{ text: `🔄 ${toSmallCaps('refresh')}`, callback_data: `users_refresh` }, { text: `📋 ${toSmallCaps('list')}`, callback_data: `users_view_list` }],
+    [{ text: `⬅️ ${toSmallCaps('back')}`, callback_data: `back_list` }]
+  ] } }
+}
+
+export async function usersCommand(ctx){
+  let text = buildText()
+  return ctx.reply(text, { ...buildKeyboard(), ...doReply(ctx) })
+}
+
+export async function usersActions(ctx){
+  const data = ctx.callbackQuery?.data || ''
+  if(!data.startsWith('users_')) return
+  try{ await ctx.answerCbQuery() }catch{}
+  console.log('BUTTON CLICKED:', data)
+
+  if(data === 'users_refresh'){
+    let text = buildText()
+    try{ await ctx.editMessageText(text, buildKeyboard()) }catch{ await ctx.reply(text, buildKeyboard()) }
+    return
   }
 
-  let allChats = Object.keys(sock.chats || {});
-  let users = allChats.filter(j=>j.endsWith("@s.whatsapp.net"));
-  let total = users.length;
-
-  let text = `${toSmallCaps("cyber-md users")}\n\n${toSmallCaps("total users")}: ${total}\n${toSmallCaps("date")}: ${new Date().toLocaleDateString('en-GB')}`;
-
-  if(total > 0 && total < 40){
-    text += `\n\n${users.map((u,i)=>`${i+1}. ${u.split("@")[0]}`).join("\n")}`;
+  if(data === 'users_view_list' || data === 'users_view'){
+    let s = getRealStats()
+    let t = `📋 ${toSmallCaps('paired users')} (${s.total})\n\n`
+    if(!s.pairedList.length) t += toSmallCaps('no paired users yet.')
+    else {
+      for(let n of s.pairedList){
+        let mark = s.connectedList.includes(n) ? '✅' : '⚠️'
+        t += `${mark} ${n} - ${s.connectedList.includes(n) ? toSmallCaps('connected') : toSmallCaps('disconnected')}\n`
+      }
+    }
+    let kb = { reply_markup: { inline_keyboard: [
+      [{ text: `🔄 ${toSmallCaps('refresh')}`, callback_data: `users_refresh` }],
+      [{ text: `⬅️ ${toSmallCaps('back')}`, callback_data: `users_refresh` }]
+    ] } }
+    try{ await ctx.editMessageText(t, kb) }catch{ await ctx.reply(t, kb) }
+    return
   }
 
-  await sock.sendMessage(m.chat,{text},{quoted:m});
+  if(data.startsWith('users_view_')){
+    let number = cleanPhone(data.replace('users_view_',''))
+    let s = getRealStats()
+    let isConn = s.connectedList.includes(number)
+    let isPaired = s.pairedList.includes(number)
+    let t = ''
+    if(isConn) t = `✅ ${number}\n\n${toSmallCaps('status')}: ${toSmallCaps('connected')}`
+    else if(isPaired) t = `⚠️ ${number}\n\n${toSmallCaps('status')}: ${toSmallCaps('disconnected - session kept')}`
+    else t = `❌ ${number}\n\n${toSmallCaps('status')}: ${toSmallCaps('not found')}`
+    try{ await ctx.editMessageText(t, buildKeyboard()) }catch{ await ctx.reply(t, buildKeyboard()) }
+    return
+  }
+}
 
- }catch(e){ await sock.sendMessage(m.chat,{text:`ᴇʀʀ: ${e.message}`},{quoted:m}) }
+export function registerUsers(bot){
+  bot.command('users', usersCommand)
+  bot.action(/^users_/, usersActions)
 }
-}
+export default registerUsers

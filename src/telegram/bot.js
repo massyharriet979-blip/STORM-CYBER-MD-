@@ -1,9 +1,9 @@
 import { Telegraf, Markup } from 'telegraf'
 import fs from 'fs'
-import { sessionCommand } from './commands/session.js'
-import { disconnectCommand, disconnectConfirm, disconnectCancel } from './commands/disconnect.js'
-import { listCommand } from './commands/list.js'
-import { usersCommand } from './commands/users.js'
+import { sessionCommand, sessionActions } from '../commands/session.js'
+import { disconnectCommand, disconnectActions, disconnectConfirm, disconnectCancel } from '../commands/disconnect.js'
+import { listCommand, listActions } from '../commands/list.js'
+import { usersCommand, usersActions } from '../commands/users.js'
 
 const R="\x1b[0m", B="\x1b[1m", C="\x1b[36m", G="\x1b[32m", Y="\x1b[33m", Rd="\x1b[31m"
 
@@ -38,7 +38,6 @@ if(!global.subbotOwners) global.subbotOwners = []
 if(!global.sessionMeta) global.sessionMeta = new Map()
 let startTime = Date.now()
 
-// --- SAME CLEANING AS pairManager + web ---
 const digits = (s) => String(s || '').replace(/[^0-9]/g, '')
 function cleanPhone(n) {
   let id = digits(n)
@@ -48,8 +47,6 @@ function cleanPhone(n) {
 
 const pendingTelegramPairs = new Map()
 function watchPendingPair(number, tgId){
-  // FIX: NO AUTO-DELETE. After 5 min we just forget the pending flag.
-  // We NEVER call clearSession here. Folder stays until user does /disconnect.
   if(pendingTelegramPairs.has(number)){
     clearTimeout(pendingTelegramPairs.get(number).timer)
   }
@@ -66,8 +63,8 @@ function finishPendingPair(number){
   pendingTelegramPairs.delete(number)
 }
 
-// FIX: real truth is activeSessions from pairManager, NOT only global.subbots
 function isReallyConnected(number){
+  // FIX: ONE TRUTH - activeSessions from pairManager (File 1)
   if(global.activeSessions?.get(number)?.connected && global.activeSessions?.get(number)?.sock) return true
   if(global.subbots?.has(number)) return true
   return false
@@ -79,8 +76,6 @@ function isRegistered(number){
     return c.registered === true
   }catch{ return false }
 }
-// DELETED: reconnectSavedSession - NO AUTO-RECONNECT. User decides.
-// DELETED: /reconnect command - removed completely.
 
 function syncConnectedCount(){ return global.subbots.size }
 function getConnected(){ return global.subbots.size }
@@ -267,13 +262,10 @@ async function startTelegram(){
       return ctx.reply(toSmallCaps(`❌ ᴜɢ ɴᴜᴍʙᴇʀ ᴍᴜsᴛ ʙᴇ 12 ᴅɪɢɪᴛs. ᴇx: /ᴘᴀɪʀ ${validExample}`), doReply(ctx))
     }
 
-    // FIX 1: already ONLINE -> no need to pair
     if(isReallyConnected(number)){
       return ctx.reply(toSmallCaps(`✅ ${number} IS ALREADY CONNECTED NO NEED TO PAIR AGAIN`), doReply(ctx))
     }
 
-    // FIX 2: registered BUT OFFLINE -> DO NOT AUTO-RECONNECT, DO NOT DELETE
-    // Just tell user session exists. Only /disconnect deletes it.
     if(isRegistered(number)){
       saveTgSession(String(ctx.from.id), number)
       return ctx.reply(toSmallCaps(`ℹ️ ${number} HAS A SAVED SESSION BUT IS OFFLINE (LOGGED OUT / DISCONNECTED). SESSION IS KEPT, NOT DELETED. USE /session TO CHECK IT. IF YOU WANT A NEW CODE, USE /disconnect ${number} FIRST, THEN /pair ${number} AGAIN.`), doReply(ctx))
@@ -322,15 +314,30 @@ async function startTelegram(){
     }
   })
 
-  // DELETED: bot.command('reconnect') - NO RECONNECT AT ALL
-
   bot.command('session', sessionCommand)
   bot.command('list', listCommand)
   bot.command('users', usersCommand)
   bot.command('disconnect', disconnectCommand)
 
+  // OLD - KEEP FOR BACKWARD COMPAT
   bot.action(/del_confirm_(.*)/, disconnectConfirm)
   bot.action(/del_cancel_(.*)/, disconnectCancel)
+
+  // FIX - THIS WAS MISSING, THIS IS WHY BUTTONS WERE DEAD
+  bot.action(/^disc_/, disconnectActions)
+  bot.action(/^users_/, usersActions)
+  bot.action(/^list_/, listActions)
+  bot.action(/^sess_/, async (ctx) => {
+    const d = ctx.callbackQuery?.data || ''
+    if(d.startsWith('sess_view_') || d.startsWith('sess_refresh_') || d === 'sess_back'){
+      return sessionActions(ctx)
+    }
+    return listActions(ctx)
+  })
+  bot.action('back_list', async (ctx) => {
+    try{ return await listActions(ctx) }catch{ return await sessionActions(ctx) }
+  })
+  bot.action(/^reconnect_/, listActions)
 
   bot.action(/copy_(.*)/, async (ctx)=>{
     const code=ctx.match[1]
