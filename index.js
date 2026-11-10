@@ -1,21 +1,21 @@
 import { trackAdmin } from './src/database/admintracker.js';
-import { startTelegram } from './src/telegram/bot.js'
+import { startTelegram } from './telegram/bot.js'
 // PairServer disabled
-import { handleAntibug } from './src/whatsapp/antibug.js'
-import { handleAntilink } from './src/whatsapp/antilink.js'
-import { handleAntibot } from './src/whatsapp/antibot.js'
-import { handleWelcomeGoodbye } from './src/whatsapp/welcome.js'
-import { handleAntidelete, saveMessageCache } from './src/whatsapp/antidelete.js'
-import { handleAntigroupmention } from './src/whatsapp/antigroupmention.js'
-import { handleAutokick } from './src/whatsapp/autokick.js'
-import { handleAntipromote } from './src/whatsapp/antipromote.js'
-import { handleAntidemote } from './src/whatsapp/antidemote.js'
-import { handleWarnReminder } from './src/whatsapp/warn.js'
+import { handleAntibug } from './whatsapp/antibug.js'
+import { handleAntilink } from './whatsapp/antilink.js'
+import { handleAntibot } from './whatsapp/antibot.js'
+import { handleWelcomeGoodbye } from './whatsapp/welcome.js'
+import { handleAntidelete, saveMessageCache } from './whatsapp/antidelete.js'
+import { handleAntigroupmention } from './whatsapp/antigroupmention.js'
+import { handleAutokick } from './whatsapp/autokick.js'
+import { handleAntipromote } from './whatsapp/antipromote.js'
+import { handleAntidemote } from './whatsapp/antidemote.js'
+import { handleWarnReminder } from './whatsapp/warn.js'
 import {
     restoreAutoActions,
     scheduleAutoAction,
     saveAutoMuteSchedule
-} from './src/whatsapp/automute.js';
+} from './whatsapp/automute.js';
 import {
     activeSessions,
     startSession,
@@ -23,7 +23,7 @@ import {
     getPairingCode,
     resumeSessions,
     hasRegisteredCredentials
-} from './src/whatsapp/pairManager.js';
+} from './whatsapp/pairManager.js';
 import makeWASocket, { useMultiFileAuthState, Browsers, makeCacheableSignalKeyStore, fetchLatestBaileysVersion, DisconnectReason } from '@whiskeysockets/baileys'
 import pino from 'pino'
 import fs from 'fs'
@@ -36,7 +36,7 @@ const __dirname = path.dirname(__filename)
 const require = createRequire(import.meta.url)
 
 const prefix = '.'
-const commandFolder = './src/commands'
+const commandFolder = './commands'
 
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
 const ask = (q) => new Promise(res => rl.question(q, res))

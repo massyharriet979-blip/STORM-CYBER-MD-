@@ -1,6 +1,12 @@
-node_modules
+node_modules/
 sessions/
-src/database/session/
-database/
+auth/
+creds/
 .env
 *.log
+*.bak
+*.py
+backup_stray/
+index/
+unlock.py
+fix_*.py
