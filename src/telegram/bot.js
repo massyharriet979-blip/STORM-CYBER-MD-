@@ -312,7 +312,7 @@ async function startTelegram(){
   })
 
   bot.command('session', sessionCommand)
-  bot.command('list', listCommand)
+// listCommand removed - telegram list disabled
   bot.command('users', usersCommand)
   bot.command('disconnect', disconnectCommand)
 

@@ -1,6 +1,6 @@
 import { trackAdmin } from './src/database/admintracker.js';
 import { startTelegram } from './src/telegram/bot.js'
-import { startPairServer } from './src/web/pairServer.js'
+// PairServer disabled
 import { handleAntibug } from './src/whatsapp/antibug.js'
 import { handleAntilink } from './src/whatsapp/antilink.js'
 import { handleAntibot } from './src/whatsapp/antibot.js'
@@ -456,7 +456,7 @@ async function startWhatsApp(){
 async function safeStart(){
   await loadCommands()
   try{ await startTelegram() }catch(e){ console.log(Rd+'Telegram start failed: '+e.message+R) }
-  try{ await startPairServer() }catch(e){ console.log(Rd+'PairServer start failed: '+e.message+R) }
+// PairServer disabled
   try{ await startWhatsApp() }catch(e){ console.log(Rd+'WhatsApp start failed: '+e.message+R); setTimeout(startWhatsApp,5000) }
 }
 safeStart()
