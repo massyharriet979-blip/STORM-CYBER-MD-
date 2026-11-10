@@ -1,52 +1,73 @@
+const small = (text) => {
+  const map = {
+    a:'ᴀ',b:'ʙ',c:'ᴄ',d:'ᴅ',e:'ᴇ',f:'ғ',
+    g:'ɢ',h:'ʜ',i:'ɪ',j:'ᴊ',k:'ᴋ',l:'ʟ',
+    m:'ᴍ',n:'ɴ',o:'ᴏ',p:'ᴘ',q:'ǫ',r:'ʀ',
+    s:'ꜱ',t:'ᴛ',u:'ᴜ',v:'ᴠ',w:'ᴡ',x:'ˣ',
+    y:'ʏ',z:'ᴢ'
+  }
+  return String(text).toLowerCase().split('').map(c => map[c] || c).join('')
+}
+
 export default {
   name: "ping",
-  aliases: ["p", "speed", "latency"],
-  description: "ᴄʏʙᴇʀ ꜱᴘᴇᴇᴅ ᴄʜᴇᴄᴋ",
+  aliases: ["p", "speed"],
+  description: "Cyber speed system",
 
-  async execute(sock, m, args) {
-    const jid = m.chat
+  async execute(sock, m) {
     const start = Date.now()
 
-    // React to the original command
     try {
-      await sock.sendMessage(jid, {
-        react: {
-          text: "⚡",
-          key: m.key
-        }
+      await sock.sendMessage(m.chat, {
+        react: { text: "⚡", key: m.key }
       })
     } catch {}
 
-    // Checking message replies to command
-    await sock.sendMessage(
-      jid,
-      { text: "🔍 ᴄʜᴇᴄᴋɪɴɢ ꜱᴇʀᴠᴇʀ..." },
-      { quoted: m }
-    )
-
-    await new Promise(r => setTimeout(r, 800))
-
     const latency = Date.now() - start
-    const speed = (Math.random() * 0.9 + 0.1).toFixed(3)
-    const ram = (
-      process.memoryUsage().heapUsed / 1024 / 1024
-    ).toFixed(2)
 
-    const text = `╭─── ᴄʏʙᴇʀ ꜱᴘᴇᴇᴅ ꜱʏꜱᴛᴇᴍ ⚡
-│
-│ ⚡ ꜱᴘᴇᴇᴅ: ${speed}s
-│ ʟᴀᴛᴇɴᴄʏ: ${latency}ᴍꜱ
-│ ꜱᴛᴀᴛᴜꜱ: ᴏɴʟɪɴᴇ ✅
-│ ʀᴀᴍ: ${ram}ᴍʙ
-│ ꜱʏꜱᴛᴇᴍ: ᴄʏʙᴇʀ-ꜱʏꜱᴛᴇᴍ
-│ ꜱᴇʀᴠᴇʀ: ꜱᴛᴏʀᴍ ᴄʟᴏᴜᴅ
-╰───────────────`
+    const formatBytes = (bytes) =>
+      (bytes / 1024 / 1024).toFixed(2) + " MB"
 
-    // Final result also replies to original command
-    await sock.sendMessage(
-      jid,
-      { text },
-      { quoted: m }
-    )
+    const memory = process.memoryUsage()
+    const uptime = Math.floor(process.uptime())
+
+    const days = Math.floor(uptime / 86400)
+    const hours = Math.floor((uptime % 86400) / 3600)
+    const minutes = Math.floor((uptime % 3600) / 60)
+    const seconds = uptime % 60
+
+    const status = latency < 500 ? "ᴇxᴄᴇʟʟᴇɴᴛ" :
+      latency < 1000 ? "ɢᴏᴏᴅ" : "sʟᴏᴡ"
+
+    const text = `
+╭━━━〔 ⚡ ${small("CYBER SPEED SYSTEM")} 〕━━━╮
+
+┃ ⚡ ${small("SPEED")} : ${latency}ms
+┃ 🚀 ${small("STATUS")} : ${status}
+┃ 🤖 ${small("BOT")} : ${small("STORM CYBER MD")}
+┃ ☁️ ${small("SERVER")} : ${small("STORM CLOUD")}
+┃ 🟢 ${small("SYSTEM")} : ${small("ONLINE")}
+
+╰━━━━━━━━━━━━━━━━━━━━╯
+
+╭━━━〔 📊 ${small("SYSTEM INFO")} 〕━━━╮
+
+┃ 💾 ${small("RAM USED")} : ${formatBytes(memory.rss)}
+┃ 📦 ${small("HEAP USED")} : ${formatBytes(memory.heapUsed)}
+┃ ⏱️ ${small("UPTIME")} : ${days}d ${hours}h ${minutes}m ${seconds}s
+
+╰━━━━━━━━━━━━━━━━━━━━╯
+
+        ⚡ ${small("POWERED BY STORM X")}
+`
+
+    await sock.sendMessage(m.chat, {
+      text,
+      contextInfo: {
+        mentionedJid: []
+      }
+    }, {
+      quoted: m
+    })
   }
 }
