@@ -275,7 +275,7 @@ async function handleOneMessage(sock, msg, isSubBotSession, msgCache){
         let name=args.shift().toLowerCase()
         let cmd=global.commands.get(name)
         if(!cmd){ console.log(`[CMD] Unknown: .${name} from ${senderNum} | loaded=${global.commands.size} | mode=${mode} | prefix=${dynamicPrefix}`); return }
-        let mObj={}
+        console.log('[DBG] msg in', body?.slice(0,30)); let mObj={}
         mObj.key=msg.key
         mObj.chat=remoteJid
         mObj.sender=sender
@@ -300,7 +300,19 @@ async function handleOneMessage(sock, msg, isSubBotSession, msgCache){
           mObj.quoted.msg=mObj.quoted.message[mObj.quoted.mtype]
         }
         console.log(`[CMD] .${name} from ${senderNum} on ${isSubBotSession?'SUBBOT':'MAIN'} ${botIdNum}`)
-        cmd.execute(sock,mObj,args).catch(e=>console.log('cmd error', name, e.message))
+        (async () => {
+  try {
+  mObj.body = body
+  mObj.text = body
+  mObj.messageTimestamp = msg.messageTimestamp
+  mObj.reply = (text, opt={}) => sock.sendMessage(mObj.chat, { text: typeof text === 'string' ? text : String(text ?? '') }, { quoted: msg, ...opt })
+  mObj.send = mObj.reply
+  mObj.react = (emoji) => sock.sendMessage(mObj.chat, { react: { text: emoji, key: msg.key } })
+  const ctx = { from: remoteJid, chat: remoteJid, sender: sender, senderNum: senderNum, botIdNum: botIdNum, isGroup: isGroup, settings: global.settings || {}, botNumber: botIdNum, prefix: dynamicPrefix, args: args, msg: msg, m: mObj, sock: sock }
+  console.log('[DBG] RUN', name, 'fn.length=', cmd.execute.length); try{ const _fn=cmd.execute; if(_fn.length<=1){ await _fn({...ctx,sock,msg:mObj,m:mObj,from:mObj.chat,chat:mObj.chat,args,reply:mObj.reply}); } else if(_fn.length===2){ await _fn(sock,mObj); } else if(_fn.length===3){ await _fn(sock,mObj.chat,mObj); } else { await _fn(sock,mObj,args,ctx); } console.log('[DBG] DONE', name); }catch(_e){ console.log('[DBG] EXEC FAIL', name, _e.message) }
+  } catch(e){ console.log('cmd error', name, e.message) }
+  })()
+  // old call removed: /* patched */
       }catch(e){
         console.log('upsert per-msg error', e.message)
         return
