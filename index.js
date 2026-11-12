@@ -1,3 +1,5 @@
+import { loadCommands as loadCommandFiles, getCommandMap } from './lib/loader.js'
+import { createMessageHandler as createSharedMessageHandler } from './lib/handler.js'
 import { trackAdmin } from './src/database/admintracker.js';
 import { startTelegram } from './telegram/bot.js'
 // PairServer disabled
@@ -121,205 +123,24 @@ function readJsonCached(file, ttlMs = 10000){
 }
 
 async function loadCommands(){
-  global.commands.clear()
-  let failed = []
-  // FIX: Telegram commands live in same folder but are NOT WhatsApp commands - skip them
-  const SKIP_TELEGRAM = new Set(['session.js','disconnect.js','list.js','users.js'])
-  const walk = (dir) => {
-    let out = []
-    try{
-      for(const e of fs.readdirSync(dir, { withFileTypes: true })){
-        const full = path.join(dir, e.name)
-        if(e.isDirectory()) out.push(...walk(full))
-        else if((e.name.endsWith('.js') || e.name.endsWith('.cjs')) && !SKIP_TELEGRAM.has(e.name)) out.push(full)
-      }
-    }catch{}
-    return out
+  await loadCommandFiles()
+  global.commands = getCommandMap()
+
+  console.log(C + `Loaded ${global.commands.size} WhatsApp command names and aliases` + R)
+
+  if(global.commands.size === 0) {
+    console.log(Rd + 'WARNING: 0 WhatsApp commands loaded' + R)
   }
-  try{
-    const files = walk(path.join(__dirname, commandFolder))
-    for(const full of files){
-      const f = path.basename(full)
-      try{
-        let mod = null
-        if(f.endsWith('.cjs')){
-          try{ delete require.cache[require.resolve(full)] }catch{}
-          mod = require(full)
-        }else{
-          const url = pathToFileURL(full).href + `?t=${Date.now()}-${Math.random()}`
-          mod = await import(url)
-        }
-        const cmd = mod?.default || mod
-        if(cmd?.name && typeof cmd.execute === 'function'){
-          global.commands.set(String(cmd.name).toLowerCase(), cmd)
-          if(Array.isArray(cmd.aliases)) cmd.aliases.forEach(a=>global.commands.set(String(a).toLowerCase(), cmd))
-          else if(Array.isArray(cmd.alias)) cmd.alias.forEach(a=>global.commands.set(String(a).toLowerCase(), cmd))
-        } else {
-          failed.push(`${f}: no name/execute`)
-        }
-      }catch(e){ failed.push(`${f}: ${e.message}`) }
-    }
-  }catch(e){ console.log('Command load error '+e.message) }
-  console.log(C+`Loaded ${global.commands.size} WhatsApp commands`+R)
-  if(failed.length) console.log(Y+`Failed ${failed.length} commands: ${failed.slice(0,10).join(' | ')}`+R)
-  if(global.commands.size === 0) console.log(Rd+`⚠️ 0 COMMANDS LOADED - check src/commands/ format!`+R)
+
   return global.commands
 }
 global.loadCommands = loadCommands
-
-function createMessageHandler(sock, isSubBotSession = false){
-  const msgCache = new Map()
-  return async ({messages})=>{
-    for(const msg of messages){
-      handleOneMessage(sock, msg, isSubBotSession, msgCache).catch(e=>console.log('upsert per-msg error', e.message))
-    }
-  }
+// Shared message handler for the main bot and every subbot.
+function createMessageHandler(sock, isSubBotSession = false) {
+  return createSharedMessageHandler(sock, isSubBotSession)
 }
 
-async function handleOneMessage(sock, msg, isSubBotSession, msgCache){
-      try{
-        if(!msg.message) return
-        if(msg.key.remoteJid=='status@broadcast') return
-        let remoteJid=msg.key.remoteJid
-        let isGroup=remoteJid.endsWith('@g.us')
-        let sender=isGroup? (msg.key.participant || msg.participant || remoteJid) : (msg.key.remoteJid)
-        if(msg.key.fromMe){
-          sender = sock.user?.id?.split(':')[0]+'@s.whatsapp.net'
-        }
-        let senderNum=sender.split('@')[0]
-        let botIdNum=(sock.user?.id?.split(':')[0].split('@')[0])||""
-
-        const delHandled = await handleAntidelete(sock, msg, remoteJid, botIdNum, msgCache)
-        if(delHandled) return
-        await saveMessageCache(msg, remoteJid, sender, msgCache, sock)
-
-        let dynamicPrefix=prefix
-        try{
-          let j = readJsonCached(`./database/prefix_${botIdNum}.json`)
-          if(j?.prefix) dynamicPrefix=j.prefix
-        }catch(e){ console.log('prefix load err', e.message) }
-        let mode="public"
-        try{
-          let j = readJsonCached(`./database/mode_${botIdNum}.json`)
-          if(j){
-            if(j.mode) mode=j.mode
-            else if(typeof j==="string") mode=j
-          } else if(!isSubBotSession){
-            let alt = readJsonCached('./src/database/mode.json')
-            if(alt){
-              if(typeof alt==="string") mode=alt
-              else if(alt.mode) mode=alt.mode
-            }
-          }
-        }catch(e){ console.log('mode load err', e.message) }
-        if(mode==="self" || mode==="inbox"){
-          if(senderNum!==botIdNum) return
-        }
-        if(mode==="private"){
-          let sudoList=[]
-          try{
-            let a = readJsonCached(`./database/sudo_${botIdNum}.json`)
-            if(Array.isArray(a)) sudoList=[...sudoList,...a]
-            else if(a?.sudo) sudoList=[...sudoList,...a.sudo]
-            let g = readJsonCached('./database/sudo.json')
-            if(Array.isArray(g)) sudoList=[...sudoList,...g]
-            else if(g?.sudo) sudoList=[...sudoList,...g.sudo]
-            let s2 = readJsonCached('./src/database/sudo.json')
-            if(Array.isArray(s2)) sudoList=[...sudoList,...s2]
-          }catch(e){ console.log('sudo load err', e.message) }
-          let isSudo=sudoList.includes(senderNum) || sudoList.includes(sender) || sudoList.includes(senderNum+"@s.whatsapp.net")
-          if(senderNum!==botIdNum &&!isSudo) return
-        }
-        try{
-          let at = readJsonCached(`./database/autotyping_${botIdNum}.json`)
-          if(at?.enabled){
-            if(!(global.ghostMode && isSubBotSession)){
-              sock.sendPresenceUpdate('composing', remoteJid).catch(()=>{})
-            }
-          }
-        }catch(e){ console.log('autotyping err', e.message) }
-        let body=msg.message.conversation||msg.message.extendedTextMessage?.text||msg.message.imageMessage?.caption||msg.message.videoMessage?.caption||''
-
-        try{
-          let mForTrack = {
-            chat: remoteJid,
-            sender: sender,
-            isGroup: isGroup,
-            body: body,
-            type: Object.keys(msg.message)[0]
-          };
-          trackAdmin(mForTrack);
-        }catch(e){ console.log('trackAdmin err', e.message) }
-
-        if(isGroup){
-          await handleAntibot(sock, remoteJid, sender, body, botIdNum)
-        }
-        if(isGroup){
-          await handleAntigroupmention(sock, remoteJid, sender, body, botIdNum, msg, isGroup)
-        }
-        if(isGroup){
-          const handled = await handleAntilink(sock, remoteJid, sender, body, botIdNum, msg)
-          if(handled) return
-        }
-        if(isGroup){
-          const bugHandled = await handleAntibug(sock, remoteJid, sender, body, botIdNum, msg, dynamicPrefix)
-          if(bugHandled) return
-        }
-        if(isGroup){
-          await handleWarnReminder(sock, remoteJid, sender, body, botIdNum, msg, dynamicPrefix, isGroup)
-        }
-
-        if(!body) return
-        if(!body.startsWith(dynamicPrefix)) return
-        let args=body.slice(dynamicPrefix.length).trim().split(/ +/)
-        let name=args.shift().toLowerCase()
-        let cmd=global.commands.get(name)
-        if(!cmd){ console.log(`[CMD] Unknown: .${name} from ${senderNum} | loaded=${global.commands.size} | mode=${mode} | prefix=${dynamicPrefix}`); return }
-        console.log('[DBG] msg in', body?.slice(0,30)); let mObj={}
-        mObj.key=msg.key
-        mObj.chat=remoteJid
-        mObj.sender=sender
-        mObj.isGroup=isGroup
-        mObj.pushName=msg.pushName||""
-        mObj.mentionedJid=msg.message.extendedTextMessage?.contextInfo?.mentionedJid||[]
-        mObj.mtype=Object.keys(msg.message)[0]
-        mObj.isSubBot = isSubBotSession
-        mObj.isSubBotOwner = isSubBotSession && (senderNum === botIdNum)
-        mObj.isOwner = (senderNum === botIdNum)
-        mObj.botNumber = botIdNum
-        mObj.senderNum = senderNum
-        let ctxInfo=msg.message.extendedTextMessage?.contextInfo || msg.message.imageMessage?.contextInfo || msg.message.videoMessage?.contextInfo
-        if(ctxInfo && ctxInfo.quotedMessage){
-          mObj.quoted={}
-          mObj.quoted.message=ctxInfo.quotedMessage
-          mObj.quoted.key={id:ctxInfo.stanzaId, remoteJid:remoteJid, participant:ctxInfo.participant}
-          mObj.quoted.sender=ctxInfo.participant||remoteJid
-          mObj.quoted.participant=ctxInfo.participant
-          mObj.quoted.pushName=""
-          mObj.quoted.mtype=Object.keys(ctxInfo.quotedMessage)[0]
-          mObj.quoted.msg=mObj.quoted.message[mObj.quoted.mtype]
-        }
-        console.log(`[CMD] .${name} from ${senderNum} on ${isSubBotSession?'SUBBOT':'MAIN'} ${botIdNum}`)
-        (async () => {
-  try {
-  mObj.body = body
-  mObj.text = body
-  mObj.messageTimestamp = msg.messageTimestamp
-  mObj.reply = (text, opt={}) => sock.sendMessage(mObj.chat, { text: typeof text === 'string' ? text : String(text ?? '') }, { quoted: msg, ...opt })
-  mObj.send = mObj.reply
-  mObj.react = (emoji) => sock.sendMessage(mObj.chat, { react: { text: emoji, key: msg.key } })
-  const ctx = { from: remoteJid, chat: remoteJid, sender: sender, senderNum: senderNum, botIdNum: botIdNum, isGroup: isGroup, settings: global.settings || {}, botNumber: botIdNum, prefix: dynamicPrefix, args: args, msg: msg, m: mObj, sock: sock }
-  console.log('[DBG] RUN', name, 'fn.length=', cmd.execute.length); try{ const _fn=cmd.execute; if(_fn.length<=1){ await _fn({...ctx,sock,msg:mObj,m:mObj,from:mObj.chat,chat:mObj.chat,args,reply:mObj.reply}); } else if(_fn.length===2){ await _fn(sock,mObj); } else if(_fn.length===3){ await _fn(sock,mObj.chat,mObj); } else { await _fn(sock,mObj,args,ctx); } console.log('[DBG] DONE', name); }catch(_e){ console.log('[DBG] EXEC FAIL', name, _e.message) }
-  } catch(e){ console.log('cmd error', name, e.message) }
-  })()
-  // old call removed: /* patched */
-      }catch(e){
-        console.log('upsert per-msg error', e.message)
-        return
-      }
-}
-
-global.createMessageHandler = createMessageHandler;
+global.createMessageHandler = createMessageHandler
 global.setMeta = setMeta;
 global.getConnected = getConnected;
 global.countUsers = countUsers;

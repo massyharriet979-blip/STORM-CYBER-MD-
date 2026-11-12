@@ -9,3 +9,17 @@ creds/
 backup_stray/
 unlock.py
 fix_*.py
+
+# Local backups
+backups/
+*.backup
+*.owner-backup
+*.bak*
+*.save
+
+# Local bot settings
+database/prefix_*.json
+
+# Private admin tracker data
+src/database/admintracker/*.json
+*.before-fix*

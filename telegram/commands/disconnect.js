@@ -1,47 +1,120 @@
 import fs from 'fs'
 
+const DB_FILE = './database/telegram_sessions.json'
+const SESSION_DIR = './sessions'
+
 function toSmallCaps(text) {
   const map = {
-    a:'ᴀ',b:'ʙ',c:'ᴄ',d:'ᴅ',e:'ᴇ',f:'ғ',g:'ɢ',
-    h:'ʜ',i:'ɪ',j:'ᴊ',k:'ᴋ',l:'ʟ',m:'ᴍ',n:'ɴ',
-    o:'ᴏ',p:'ᴘ',q:'ǫ',r:'ʀ',s:'s',t:'ᴛ',u:'ᴜ',
-    v:'ᴠ',w:'ᴡ',x:'x',y:'ʏ',z:'ᴢ'
+    a:'ᴀ', b:'ʙ', c:'ᴄ', d:'ᴅ', e:'ᴇ', f:'ғ',
+    g:'ɢ', h:'ʜ', i:'ɪ', j:'ᴊ', k:'ᴋ', l:'ʟ',
+    m:'ᴍ', n:'ɴ', o:'ᴏ', p:'ᴘ', q:'ǫ', r:'ʀ',
+    s:'s', t:'ᴛ', u:'ᴜ', v:'ᴠ', w:'ᴡ', x:'x',
+    y:'ʏ', z:'ᴢ'
   }
-  return String(text || '').toLowerCase()
-    .split('').map(c => map[c] || c).join('')
+
+  return String(text || '')
+    .toLowerCase()
+    .split('')
+    .map(c => map[c] || c)
+    .join('')
 }
 
-function doReply(ctx) {
-  try {
-    if (ctx.message) {
-      return {
-        reply_parameters: {
-          message_id: ctx.message.message_id
-        }
-      }
-    }
-  } catch {}
-  return {}
-}
+const digits = value =>
+  String(value || '').replace(/[^0-9]/g, '')
 
-const digits = s => String(s || '').replace(/[^0-9]/g, '')
+function cleanPhone(value) {
+  let number = digits(value)
 
-function cleanPhone(n) {
-  let id = digits(n)
-  if (id.startsWith('0')) id = id.slice(1)
-  return id
+  if (number.startsWith('0')) {
+    number = number.slice(1)
+  }
+
+  return number
 }
 
 function sessionPath(number) {
-  return `./sessions/${number}`
+  return `${SESSION_DIR}/${number}`
 }
 
 function sessionExists(number) {
   try {
-    return fs.existsSync(sessionPath(number))
+    return /^\d{7,15}$/.test(number) &&
+      fs.existsSync(sessionPath(number))
   } catch {
     return false
   }
+}
+
+function loadDatabase() {
+  try {
+    if (!fs.existsSync(DB_FILE)) return {}
+
+    const data = JSON.parse(
+      fs.readFileSync(DB_FILE, 'utf8')
+    )
+
+    return data && typeof data === 'object' && !Array.isArray(data)
+      ? data
+      : {}
+  } catch (error) {
+    console.log('Telegram session database error:', error.message)
+    return {}
+  }
+}
+
+function saveDatabase(db) {
+  fs.mkdirSync('./database', { recursive: true })
+
+  fs.writeFileSync(
+    DB_FILE,
+    JSON.stringify(db, null, 2)
+  )
+}
+
+function getUserNumbers(userId) {
+  const db = loadDatabase()
+  const numbers = db[String(userId)]
+
+  if (!Array.isArray(numbers)) return []
+
+  return [...new Set(
+    numbers
+      .map(cleanPhone)
+      .filter(number => /^\d{7,15}$/.test(number))
+  )]
+}
+
+function ownsSession(userId, number) {
+  return getUserNumbers(userId).includes(cleanPhone(number))
+}
+
+function removeUserSession(userId, number) {
+  const db = loadDatabase()
+  const id = String(userId)
+
+  if (!Array.isArray(db[id])) return
+
+  db[id] = db[id].filter(
+    item => cleanPhone(item) !== number
+  )
+
+  if (!db[id].length) {
+    delete db[id]
+  }
+
+  saveDatabase(db)
+}
+
+function doReply(ctx) {
+  if (ctx.message) {
+    return {
+      reply_parameters: {
+        message_id: ctx.message.message_id
+      }
+    }
+  }
+
+  return {}
 }
 
 function confirmKeyboard(number) {
@@ -68,11 +141,11 @@ async function updateMessage(ctx, text, extra = {}) {
     }
 
     return await ctx.reply(text, extra)
-  } catch {
+  } catch (error) {
     try {
       return await ctx.reply(text, extra)
-    } catch (e) {
-      console.log('Telegram message error:', e.message)
+    } catch (secondError) {
+      console.log('Telegram message error:', secondError.message)
     }
   }
 }
@@ -84,222 +157,271 @@ async function popup(ctx, message) {
         show_alert: true
       })
     }
-  } catch (e) {
-    console.log('Popup error:', e.message)
-  }
+  } catch {}
 }
 
-// CHECK AVAILABLE SERVERS
+function getTelegramUserId(ctx) {
+  return String(ctx.from?.id || '')
+}
+
+// SHOW ONLY THE CURRENT USER'S SESSIONS
 export async function disconnectCommand(ctx) {
+  const userId = getTelegramUserId(ctx)
+
+  if (!userId) {
+    return ctx.reply('Unable to identify your Telegram account.')
+  }
+
   let status
 
   try {
     status = await ctx.reply(
-      `⌛️ ${toSmallCaps('checking available servers...')}`,
+      `⌛️ ${toSmallCaps('checking your sessions...')}`,
       doReply(ctx)
     )
-  } catch (e) {
-    console.log('Status error:', e.message)
+  } catch (error) {
+    console.log('Status error:', error.message)
     return
   }
 
   const raw = ctx.message?.text?.split(/\s+/)[1] || ''
-  const number = cleanPhone(raw)
 
-  // LIST AVAILABLE SESSIONS
-  if (!number) {
-    let folders = []
+  // CHECK A SPECIFIC NUMBER
+  if (raw) {
+    const number = cleanPhone(raw)
 
-    try {
-      folders = fs.readdirSync('./sessions')
-        .filter(d => /^\d+$/.test(d))
-    } catch {}
-
-    if (!folders.length) {
+    if (!/^\d{7,15}$/.test(number)) {
       return ctx.telegram.editMessageText(
         ctx.chat.id,
         status.message_id,
         undefined,
-        `🚫 ${toSmallCaps('no available sessions found.')}`
+        `❌ ${toSmallCaps('invalid phone number.')}`
       )
     }
 
-    const rows = []
-
-    for (let i = 0; i < folders.length; i += 2) {
-      const row = [{
-        text: folders[i],
-        callback_data: `disc_view_${folders[i]}`
-      }]
-
-      if (folders[i + 1]) {
-        row.push({
-          text: folders[i + 1],
-          callback_data: `disc_view_${folders[i + 1]}`
-        })
-      }
-
-      rows.push(row)
+    if (!ownsSession(userId, number)) {
+      return ctx.telegram.editMessageText(
+        ctx.chat.id,
+        status.message_id,
+        undefined,
+        `🚫 ${toSmallCaps('this number is not registered to your telegram account.')}`
+      )
     }
 
-    const t =
-      `✅ ${toSmallCaps('available servers found')}\n\n` +
-      `${toSmallCaps('tap a number to disconnect it:')}\n\n` +
-      `${toSmallCaps('select carefully. disconnecting deletes its session.')}`
+    if (!sessionExists(number)) {
+      return ctx.telegram.editMessageText(
+        ctx.chat.id,
+        status.message_id,
+        undefined,
+        `🚫 ${toSmallCaps('your session folder was not found.')}`
+      )
+    }
 
     return ctx.telegram.editMessageText(
       ctx.chat.id,
       status.message_id,
       undefined,
-      t,
-      { reply_markup: { inline_keyboard: rows } }
+      `⚠️ ${toSmallCaps('disconnect')} ${number}?\n\n` +
+      `${toSmallCaps('this will log out your whatsapp session and delete its saved session folder.')}\n\n` +
+      `${toSmallCaps('you will need to pair again to reconnect.')}`,
+      confirmKeyboard(number)
     )
   }
 
-  // CHECK SPECIFIC NUMBER
-  if (!sessionExists(number)) {
+  // GET ONLY THIS TELEGRAM USER'S NUMBERS
+  const numbers = getUserNumbers(userId)
+    .filter(number => sessionExists(number))
+
+  if (!numbers.length) {
     return ctx.telegram.editMessageText(
       ctx.chat.id,
       status.message_id,
       undefined,
-      `🚫 ${toSmallCaps('no session found for this number.')}\n\n` +
-      `${toSmallCaps('number:')} ${number}\n` +
-      `${toSmallCaps('please check the number and try again.')}`
+      `🚫 ${toSmallCaps('you have no available sessions.')}\n\n` +
+      `${toSmallCaps('pair a whatsapp number first using /pair.')}`
     )
   }
 
-  const t =
-    `⚠️ ${toSmallCaps('disconnect')} ${number} ?\n\n` +
-    `${toSmallCaps('this will log it out and delete its session folder from server.')}\n\n` +
-    `${toSmallCaps('you will need to /pair again to reconnect.')}`
+  const rows = []
+
+  for (let i = 0; i < numbers.length; i += 2) {
+    const row = [{
+      text: numbers[i],
+      callback_data: `disc_view_${numbers[i]}`
+    }]
+
+    if (numbers[i + 1]) {
+      row.push({
+        text: numbers[i + 1],
+        callback_data: `disc_view_${numbers[i + 1]}`
+      })
+    }
+
+    rows.push(row)
+  }
+
+  const message =
+    `✅ ${toSmallCaps('your available sessions')}\n\n` +
+    `${toSmallCaps('select your number to disconnect it:')}\n\n` +
+    `${toSmallCaps('only your registered numbers are shown.')}`
 
   return ctx.telegram.editMessageText(
     ctx.chat.id,
     status.message_id,
     undefined,
-    t,
-    confirmKeyboard(number)
+    message,
+    {
+      reply_markup: {
+        inline_keyboard: rows
+      }
+    }
   )
 }
 
 // BUTTON ACTIONS
 export async function disconnectActions(ctx) {
   const data = ctx.callbackQuery?.data || ''
+  const userId = getTelegramUserId(ctx)
 
   if (!data.startsWith('disc_')) return
 
-  console.log('BUTTON CLICKED:', data)
-
   // VIEW SESSION
   if (data.startsWith('disc_view_')) {
-    try {
-      await ctx.answerCbQuery()
-    } catch {}
+    await ctx.answerCbQuery().catch(() => {})
 
-    const number = cleanPhone(data.replace('disc_view_', ''))
+    const number = cleanPhone(
+      data.slice('disc_view_'.length)
+    )
+
+    if (!ownsSession(userId, number)) {
+      return updateMessage(
+        ctx,
+        `🚫 ${toSmallCaps('this session does not belong to your telegram account.')}`
+      )
+    }
 
     if (!sessionExists(number)) {
       return updateMessage(
         ctx,
-        `🚫 ${toSmallCaps('no session found for this number.')}`
+        `🚫 ${toSmallCaps('session folder not found.')}`
       )
     }
 
-    const t =
-      `⚠️ ${toSmallCaps('disconnect')} ${number} ?\n\n` +
-      `${toSmallCaps('this will log it out and delete its session folder from server.')}`
-
-    return updateMessage(ctx, t, confirmKeyboard(number))
+    return updateMessage(
+      ctx,
+      `⚠️ ${toSmallCaps('disconnect')} ${number}?\n\n` +
+      `${toSmallCaps('this will log out your whatsapp session and delete its saved session folder.')}`,
+      confirmKeyboard(number)
+    )
   }
 
   // CONFIRM DISCONNECT
   if (data.startsWith('disc_confirm_')) {
-    const number = cleanPhone(data.replace('disc_confirm_', ''))
-    return doDisconnect(ctx, number)
+    await ctx.answerCbQuery().catch(() => {})
+
+    const number = cleanPhone(
+      data.slice('disc_confirm_'.length)
+    )
+
+    if (!ownsSession(userId, number)) {
+      return updateMessage(
+        ctx,
+        `🚫 ${toSmallCaps('you cannot disconnect another users session.')}`
+      )
+    }
+
+    return doDisconnect(ctx, number, userId)
   }
 
   // CANCEL DISCONNECT
   if (data.startsWith('disc_cancel_')) {
-    const number = cleanPhone(data.replace('disc_cancel_', ''))
+    const number = cleanPhone(
+      data.slice('disc_cancel_'.length)
+    )
 
-    try {
-      await ctx.answerCbQuery(
-        'DISCONNECTION CANCELLED',
-        { show_alert: true }
+    await ctx.answerCbQuery(
+      'DISCONNECTION CANCELLED',
+      { show_alert: true }
+    ).catch(() => {})
+
+    if (!ownsSession(userId, number)) {
+      return updateMessage(
+        ctx,
+        `🚫 ${toSmallCaps('this session does not belong to your account.')}`
       )
-    } catch {}
-
-    const exists = sessionExists(number)
+    }
 
     return updateMessage(
       ctx,
       `🛑 ${toSmallCaps('disconnection cancelled')}\n\n` +
-      (exists
-        ? `✅ ${toSmallCaps('your session was not deleted.')}\n` +
-          `🔒 ${toSmallCaps('connection information preserved.')}`
-        : `ℹ️ ${toSmallCaps('session is no longer available.')}`)
+      `✅ ${toSmallCaps('your session was not deleted.')}\n` +
+      `🔒 ${toSmallCaps('connection information preserved.')}`
     )
   }
 }
 
 // REAL DISCONNECTION
-async function doDisconnect(ctx, number) {
+async function doDisconnect(ctx, number, userId) {
   try {
-    if (!number) {
+    if (!/^\d{7,15}$/.test(number)) {
       await updateMessage(
         ctx,
-        `❌ ${toSmallCaps('invalid server number.')}`
+        `❌ ${toSmallCaps('invalid phone number.')}`
       )
-      await popup(ctx, 'INVALID SERVER NUMBER!')
       return
     }
 
-    // VERIFY SESSION BEFORE DISCONNECTING
+    // CHECK OWNERSHIP AGAIN BEFORE DELETING
+    if (!ownsSession(userId, number)) {
+      await updateMessage(
+        ctx,
+        `🚫 ${toSmallCaps('this session does not belong to your account.')}`
+      )
+      return
+    }
+
     if (!sessionExists(number)) {
       await updateMessage(
         ctx,
-        `🚫 ${toSmallCaps('no session found for this number.')}\n\n` +
-        `${toSmallCaps('nothing was disconnected.')}`
+        `🚫 ${toSmallCaps('session folder not found.')}`
       )
-      await popup(ctx, 'NO SESSION FOUND FOR THIS NUMBER!')
       return
     }
 
-    // DISCONNECTING STATUS
     await updateMessage(
       ctx,
-      `⌛️ ${toSmallCaps('disconnecting...')}\n\n` +
-      `${toSmallCaps('please wait while the server is being disconnected.')}`
+      `⌛️ ${toSmallCaps('disconnecting your session...')}\n\n` +
+      `${toSmallCaps('please wait.')}`
     )
 
-    // USE MAIN ENGINE DISCONNECT FUNCTION
+    // USE MAIN ENGINE CLEANUP FUNCTION
     if (typeof global.clearSession === 'function') {
       await global.clearSession(number)
     } else {
-      // FALLBACK
-      const activeSocket = global.activeSessions?.get(number)
-        || global.subbots?.get(number)
+      // FALLBACK SOCKET CLEANUP
+      const activeEntry = global.activeSessions?.get(number)
+      const subbotEntry = global.subbots?.get(number)
 
-      // Close socket if available
+      const activeSocket =
+        activeEntry?.sock ||
+        activeEntry ||
+        subbotEntry?.sock ||
+        subbotEntry
+
       try {
         if (typeof activeSocket?.end === 'function') {
           activeSocket.end(
-            new Error('Session disconnected by administrator')
+            new Error('Session disconnected by its owner')
           )
         } else if (typeof activeSocket?.ws?.close === 'function') {
           activeSocket.ws.close()
         }
-      } catch (e) {
-        console.log('Socket close:', e.message)
+      } catch (error) {
+        console.log('Socket close:', error.message)
       }
 
-      if (global.activeSessions?.has(number)) {
-        global.activeSessions.delete(number)
-      }
-
-      if (global.subbots?.has(number)) {
-        global.subbots.delete(number)
-      }
+      global.activeSessions?.delete(number)
+      global.subbots?.delete(number)
 
       fs.rmSync(sessionPath(number), {
         recursive: true,
@@ -307,76 +429,37 @@ async function doDisconnect(ctx, number) {
       })
     }
 
-    // ENSURE SESSION FOLDER IS DELETED
-    if (sessionExists(number)) {
-      fs.rmSync(sessionPath(number), {
-        recursive: true,
-        force: true
-      })
-    }
-
-    // VERIFY REAL DELETION
+    // VERIFY DELETION
     if (sessionExists(number)) {
       throw new Error('SESSION STILL EXISTS ON SERVER')
     }
 
-    // REMOVE SESSION METADATA
-    if (global.sessionMeta?.has(number)) {
-      global.sessionMeta.delete(number)
-    }
+    // REMOVE METADATA
+    global.sessionMeta?.delete(number)
 
-    // REMOVE TELEGRAM SESSION RECORDS
-    try {
-      const file = './database/telegram_sessions.json'
+    // REMOVE ONLY THIS USER'S TELEGRAM RECORD
+    removeUserSession(userId, number)
 
-      if (fs.existsSync(file)) {
-        const db = JSON.parse(
-          fs.readFileSync(file, 'utf8')
-        )
-
-        for (const key of Object.keys(db)) {
-          if (Array.isArray(db[key])) {
-            db[key] = db[key].filter(
-              n => cleanPhone(n) !== number
-            )
-
-            if (!db[key].length) {
-              delete db[key]
-            }
-          }
-        }
-
-        fs.writeFileSync(
-          file,
-          JSON.stringify(db, null, 2)
-        )
-      }
-    } catch (e) {
-      console.log('Telegram database cleanup:', e.message)
-    }
-
-    // FINAL SUCCESS MESSAGE
     await updateMessage(
       ctx,
-      `✅️ ${toSmallCaps('disconnected from the servers')}\n\n` +
+      `✅ ${toSmallCaps('your whatsapp session was disconnected.')}\n\n` +
       `📁 ${toSmallCaps('session deleted:')} ${number}\n` +
       `🔒 ${toSmallCaps('session folder verified as deleted.')}\n\n` +
       `🔄 ${toSmallCaps('use /pair to reconnect.')}`
     )
 
-    // SUCCESS POPUP
     await popup(
       ctx,
-      '✅ SERVER DISCONNECTED SUCCESSFULLY!'
+      '✅ YOUR SESSION WAS DISCONNECTED!'
     )
 
-  } catch (e) {
-    console.log('disconnect err:', e.message)
+  } catch (error) {
+    console.log('Disconnect error:', error.message)
 
     await updateMessage(
       ctx,
       `❌ ${toSmallCaps('disconnection failed')}\n\n` +
-      `${toSmallCaps('reason:')} ${e.message}`
+      `${toSmallCaps('reason:')} ${error.message}`
     )
 
     await popup(
@@ -389,18 +472,38 @@ async function doDisconnect(ctx, number) {
 // COMPATIBILITY HANDLERS
 export async function disconnectConfirm(ctx) {
   const number = cleanPhone(ctx.match?.[1] || '')
-  return doDisconnect(ctx, number)
+  const userId = getTelegramUserId(ctx)
+
+  if (!ownsSession(userId, number)) {
+    await ctx.answerCbQuery(
+      'THIS SESSION DOES NOT BELONG TO YOUR ACCOUNT.',
+      { show_alert: true }
+    ).catch(() => {})
+
+    return updateMessage(
+      ctx,
+      `🚫 ${toSmallCaps('this session does not belong to your account.')}`
+    )
+  }
+
+  return doDisconnect(ctx, number, userId)
 }
 
 export async function disconnectCancel(ctx) {
   const number = cleanPhone(ctx.match?.[1] || '')
+  const userId = getTelegramUserId(ctx)
 
-  try {
-    await ctx.answerCbQuery(
-      'DISCONNECTION CANCELLED',
-      { show_alert: true }
+  await ctx.answerCbQuery(
+    'DISCONNECTION CANCELLED',
+    { show_alert: true }
+  ).catch(() => {})
+
+  if (!ownsSession(userId, number)) {
+    return updateMessage(
+      ctx,
+      `🚫 ${toSmallCaps('this session does not belong to your account.')}`
     )
-  } catch {}
+  }
 
   return updateMessage(
     ctx,
@@ -413,8 +516,10 @@ export async function disconnectCancel(ctx) {
 export function registerDisconnect(bot) {
   bot.command('disconnect', disconnectCommand)
   bot.action(/^disc_/, disconnectActions)
-  bot.action(/del_confirm_(.*)/, disconnectConfirm)
-  bot.action(/del_cancel_(.*)/, disconnectCancel)
+
+  // Legacy callback compatibility
+  bot.action(/^del_confirm_(.*)$/, disconnectConfirm)
+  bot.action(/^del_cancel_(.*)$/, disconnectCancel)
 }
 
 export default registerDisconnect
